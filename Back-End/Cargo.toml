@@ -5,5 +5,7 @@ edition = "2021"
 
 [dependencies]
 axum = "0.8"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-native-tls", "macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

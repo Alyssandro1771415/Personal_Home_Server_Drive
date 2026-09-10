@@ -1,11 +1,25 @@
-use crate::adapters::db::memory::InMemoryUsers;
+use crate::adapters::db::postgres_users::PostgresUsers;
 use crate::adapters::http;
 
+use crate::adapters::db::postgres_connection;
+
+use std::env;
+use std::path::Path;
+
 pub async fn run() {
-    let users = InMemoryUsers::with_seed();
+    let env_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+    dotenvy::from_path(&env_path).expect("não foi possível ler o .env em Back-End/");
+
+    let pool = postgres_connection::postgres_connection()
+        .await
+        .expect("Falha ao conectar ao banco de dados");
+
+    let users = PostgresUsers::new(pool);
     let app = http::router(users);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:5000")
+    let server_host = env::var("SERVER_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let server_port = env::var("SERVER_PORT").unwrap_or_else(|_| "5000".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("{server_host}:{server_port}"))
         .await
         .expect("Falha ao iniciar o servidor na porta 5000");
 

@@ -3,12 +3,12 @@ use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
 
-use crate::adapters::db::memory::InMemoryUsers;
-use crate::use_cases::list_users::ListUsers;
+use crate::adapters::db::postgres_users::PostgresUsers;
+use crate::use_cases::list_users_bd::ListUsers;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub users: InMemoryUsers,
+    pub users: PostgresUsers,
 }
 
 #[derive(Serialize)]
@@ -28,7 +28,7 @@ async fn list_users(
         repo: Arc::new(state.users),
     };
 
-    let users = uc.execute().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let users = uc.execute().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let body = users
         .into_iter()

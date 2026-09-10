@@ -1,2 +1,3 @@
 //! Adapter de persistência (SQLite + SQLx).
-pub mod memory;
+pub mod postgres_connection;
+pub mod postgres_users;
