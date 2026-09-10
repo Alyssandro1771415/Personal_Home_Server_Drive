@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use crate::domain::{Erro, User, UserId};
+use crate::domain::{Erro, User, UserId, UserSecret};
 use crate::ports::UserRepoBd;
 
 
@@ -17,7 +17,7 @@ impl PostgresUsers {
 impl UserRepoBd for PostgresUsers {
     async fn list(&self) -> Result<Vec<User>, Erro> {
         let rows = sqlx::query_as::<_, (i32, String)>(
-            "SELECT * FROM users ORDER BY id",
+            "SELECT id, nome FROM users ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await.map_err(|e| {
@@ -32,5 +32,22 @@ impl UserRepoBd for PostgresUsers {
                 name,
             })
             .collect())
+    }
+
+    async fn get_hashs(&self, id: UserId) -> Result<Option<UserSecret>, Erro> {
+        let rows = sqlx::query_as::<_, (i32, String)>(
+            "SELECT id, password_hash FROM users WHERE id = $1",
+        )
+        .bind(id.0 as i32)
+        .fetch_optional(&self.pool)
+        .await.map_err(|e| {
+            eprintln!("sqlx: {e}");
+            Erro::Interno
+        })?;
+
+        Ok(rows.map(|(id, hash)| UserSecret {
+            user_id: UserId(id as i64),
+            password_hash: hash
+        }))
     }
 }
