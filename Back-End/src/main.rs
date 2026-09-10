@@ -1,3 +1,4 @@
-fn main() {
-    drive::bootstrap::run();
+#[tokio::main]
+async fn main() {
+    drive::bootstrap::run().await;
 }
