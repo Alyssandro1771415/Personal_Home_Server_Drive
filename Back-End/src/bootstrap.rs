@@ -17,7 +17,7 @@ pub async fn run() {
     let users = PostgresUsers::new(pool);
     let app = http::router(users);
 
-    let server_host = env::var("SERVER_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let server_host: String = env::var("SERVER_HOST").unwrap_or_else(|_| "localhost".to_string());
     let server_port = env::var("SERVER_PORT").unwrap_or_else(|_| "5000".to_string());
     let listener = tokio::net::TcpListener::bind(format!("{server_host}:{server_port}"))
         .await
