@@ -2,3 +2,4 @@
 //! Falam com o domínio e com as portas, nunca com Axum ou SQLite direto.
 pub mod list_users_bd;
 pub mod login;
+pub mod register;

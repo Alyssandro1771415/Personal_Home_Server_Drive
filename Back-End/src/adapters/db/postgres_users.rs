@@ -47,7 +47,23 @@ impl UserRepoBd for PostgresUsers {
 
         Ok(rows.map(|(id, hash)| UserSecret {
             user_id: UserId(id as i64),
-            password_hash: hash
+            password_hash: hash,
         }))
+    }
+
+    async fn create(&self, nome: String, password_hash: String) -> Result<UserId, Erro> {
+        let id = sqlx::query_scalar::<_, i32>(
+            "INSERT INTO users (nome, password_hash) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(&nome)
+        .bind(&password_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            eprintln!("sqlx: {e}");
+            Erro::Interno
+        })?;
+
+        Ok(UserId(id as i64))
     }
 }
