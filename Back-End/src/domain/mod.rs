@@ -8,6 +8,6 @@ pub mod user_secret;
 
 pub use dek::{Dek, WrappedDek};
 pub use error::Erro;
-pub use files::{FileId, StoredFile};
+pub use files::{FileId, Folder, FolderId, StoredFile};
 pub use users::{User, UserId};
 pub use user_secret::UserSecret;

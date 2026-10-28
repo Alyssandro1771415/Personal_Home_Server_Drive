@@ -26,3 +26,7 @@ target
 
 # Encrypted user vaults on disk
 storage/
+
+# Front-End
+Front-End/node_modules/
+Front-End/dist/

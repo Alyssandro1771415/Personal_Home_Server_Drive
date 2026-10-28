@@ -43,6 +43,7 @@ impl FileRepoBd for PostgresFiles {
     async fn create(
         &self,
         owner: UserId,
+        folder_id: Option<i64>,
         nome: String,
         mime: Option<String>,
         tamanho_bytes: i64,
@@ -50,10 +51,11 @@ impl FileRepoBd for PostgresFiles {
     ) -> Result<StoredFile, Erro> {
         let row = sqlx::query_as::<_, (i32, i32, Option<i32>, String, Option<String>, i64, String)>(
             "INSERT INTO files (owner_id, folder_id, nome, mime, tamanho_bytes, storage_key)
-             VALUES ($1, NULL, $2, $3, $4, $5)
+             VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING id, owner_id, folder_id, nome, mime, tamanho_bytes, storage_key",
         )
         .bind(owner.0 as i32)
+        .bind(folder_id.map(|id| id as i32))
         .bind(&nome)
         .bind(&mime)
         .bind(tamanho_bytes)
@@ -65,14 +67,19 @@ impl FileRepoBd for PostgresFiles {
         Ok(from_row(row.0, row.1, row.2, row.3, row.4, row.5, row.6))
     }
 
-    async fn list_root(&self, owner: UserId) -> Result<Vec<StoredFile>, Erro> {
+    async fn list_in(
+        &self,
+        owner: UserId,
+        folder_id: Option<i64>,
+    ) -> Result<Vec<StoredFile>, Erro> {
         let rows = sqlx::query_as::<_, (i32, i32, Option<i32>, String, Option<String>, i64, String)>(
             "SELECT id, owner_id, folder_id, nome, mime, tamanho_bytes, storage_key
              FROM files
-             WHERE owner_id = $1 AND folder_id IS NULL
-             ORDER BY id",
+             WHERE owner_id = $1 AND folder_id IS NOT DISTINCT FROM $2
+             ORDER BY lower(nome), id",
         )
         .bind(owner.0 as i32)
+        .bind(folder_id.map(|id| id as i32))
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx)?;

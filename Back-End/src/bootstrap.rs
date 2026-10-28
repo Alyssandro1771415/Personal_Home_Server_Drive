@@ -1,6 +1,7 @@
 use crate::adapters::crypto::AesGcmCrypto;
 use crate::adapters::db::postgres_connection;
 use crate::adapters::db::postgres_files::PostgresFiles;
+use crate::adapters::db::postgres_folders::PostgresFolders;
 use crate::adapters::db::postgres_users::PostgresUsers;
 use crate::adapters::fs::FsStore;
 use crate::adapters::http;
@@ -31,7 +32,8 @@ pub async fn run() {
 
     let state = AppState {
         users: PostgresUsers::new(pool.clone()),
-        files: PostgresFiles::new(pool),
+        files: PostgresFiles::new(pool.clone()),
+        folders: PostgresFolders::new(pool),
         store: FsStore::new(storage_root),
         crypto: AesGcmCrypto,
         sessions: Default::default(),
