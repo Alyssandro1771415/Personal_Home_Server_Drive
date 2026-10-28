@@ -19,7 +19,7 @@ impl<R: FolderRepoBd> FolderPath<R> {
                 return Err(Erro::Interno);
             }
             let folder = self.repo.get(folder_id).await?.ok_or(Erro::NaoEncontrado)?;
-            if folder.owner_id != owner {
+            if folder.owner_id != owner || folder.trashed_at.is_some() {
                 return Err(Erro::NaoEncontrado);
             }
             current = folder.parent_id;

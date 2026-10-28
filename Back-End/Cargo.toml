@@ -9,7 +9,8 @@ argon2 = "0.5"
 axum = { version = "0.8", features = ["multipart"] }
 dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-native-tls", "macros"] }
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-native-tls", "macros", "chrono"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs"] }
 tower-http = { version = "0.6", features = ["cors"] }
 uuid = { version = "1", features = ["v4"] }

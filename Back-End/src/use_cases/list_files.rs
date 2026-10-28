@@ -16,7 +16,7 @@ impl<F: FileRepoBd, D: FolderRepoBd> ListFiles<F, D> {
     ) -> Result<Vec<StoredFile>, Erro> {
         if let Some(id) = folder_id {
             let folder = self.folders.get(id).await?.ok_or(Erro::NaoEncontrado)?;
-            if folder.owner_id != owner {
+            if folder.owner_id != owner || folder.trashed_at.is_some() {
                 return Err(Erro::NaoEncontrado);
             }
         }

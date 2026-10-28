@@ -3,10 +3,22 @@ import { Navigate } from "react-router-dom";
 import {
   ApiError,
   createFolder,
+  daysLeft,
   downloadFile,
   folderPath,
   listFiles,
   listFolders,
+  listTrash,
+  moveFile,
+  moveFolder,
+  purgeFile,
+  purgeFolder,
+  renameFile,
+  renameFolder,
+  restoreFile,
+  restoreFolder,
+  trashFile,
+  trashFolder,
   uploadFile,
   type DriveFile,
   type DriveFolder,
@@ -29,9 +41,37 @@ function formatBytes(n: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
 }
 
+function ttlLabel(expiresAt?: string): string {
+  const days = daysLeft(expiresAt);
+  if (days === null) {
+    return "Lixeira";
+  }
+  if (days <= 0) {
+    return "Expira hoje";
+  }
+  if (days === 1) {
+    return "1 dia restante";
+  }
+  return `${days} dias restantes`;
+}
+
 type Preview = {
   file: DriveFile;
   url: string;
+};
+
+type ItemKind = "file" | "folder";
+
+type Moving = {
+  kind: ItemKind;
+  id: number;
+  nome: string;
+};
+
+type Renaming = {
+  kind: ItemKind;
+  id: number;
+  nome: string;
 };
 
 export function DrivePage() {
@@ -40,11 +80,15 @@ export function DrivePage() {
   const [crumbs, setCrumbs] = useState<DriveFolder[]>([]);
   const [folders, setFolders] = useState<DriveFolder[]>([]);
   const [files, setFiles] = useState<DriveFile[]>([]);
+  const [inTrash, setInTrash] = useState(false);
+  const [ttlDays, setTtlDays] = useState(30);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
   const [naming, setNaming] = useState(false);
   const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState<Renaming | null>(null);
+  const [moving, setMoving] = useState<Moving | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
@@ -53,6 +97,14 @@ export function DrivePage() {
   const refresh = useCallback(async () => {
     setError(null);
     try {
+      if (inTrash) {
+        const trash = await listTrash();
+        setFolders(trash.folders);
+        setFiles(trash.files);
+        setTtlDays(trash.ttl_days);
+        setCrumbs([]);
+        return;
+      }
       const [nextFolders, nextFiles, path] = await Promise.all([
         listFolders(folderId),
         listFiles(folderId),
@@ -64,7 +116,7 @@ export function DrivePage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Falha ao listar o diretório.");
     }
-  }, [folderId]);
+  }, [folderId, inTrash]);
 
   useEffect(() => {
     if (user) {
@@ -112,7 +164,9 @@ export function DrivePage() {
   function onDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDrag(false);
-    void sendFiles(event.dataTransfer.files);
+    if (!inTrash) {
+      void sendFiles(event.dataTransfer.files);
+    }
   }
 
   async function onDownload(file: DriveFile) {
@@ -140,6 +194,8 @@ export function DrivePage() {
   }
 
   function goTo(id: number | null) {
+    setInTrash(false);
+    setRenaming(null);
     if (id === null) {
       setCrumbs([]);
       setFolderId(null);
@@ -153,8 +209,21 @@ export function DrivePage() {
   }
 
   function openFolder(folder: DriveFolder) {
+    if (inTrash) {
+      return;
+    }
     setCrumbs((prev) => [...prev, folder]);
     setFolderId(folder.id);
+  }
+
+  function openTrash() {
+    setFolders([]);
+    setFiles([]);
+    setInTrash(true);
+    setNaming(false);
+    setRenaming(null);
+    setMoving(null);
+    setPreview(null);
   }
 
   async function onCreateFolder(event: FormEvent) {
@@ -170,6 +239,88 @@ export function DrivePage() {
     }
   }
 
+  async function onRename(event: FormEvent) {
+    event.preventDefault();
+    if (!renaming) {
+      return;
+    }
+    setError(null);
+    try {
+      if (renaming.kind === "folder") {
+        await renameFolder(renaming.id, renaming.nome);
+      } else {
+        await renameFile(renaming.id, renaming.nome);
+      }
+      setRenaming(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível renomear.");
+    }
+  }
+
+  async function onMove(dest: number | null) {
+    if (!moving) {
+      return;
+    }
+    setError(null);
+    try {
+      if (moving.kind === "folder") {
+        await moveFolder(moving.id, dest);
+      } else {
+        await moveFile(moving.id, dest);
+      }
+      setMoving(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível mover.");
+    }
+  }
+
+  async function onTrash(kind: ItemKind, id: number) {
+    setError(null);
+    try {
+      if (kind === "folder") {
+        await trashFolder(id);
+      } else {
+        await trashFile(id);
+      }
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível enviar à lixeira.");
+    }
+  }
+
+  async function onRestore(kind: ItemKind, id: number) {
+    setError(null);
+    try {
+      if (kind === "folder") {
+        await restoreFolder(id);
+      } else {
+        await restoreFile(id);
+      }
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível restaurar.");
+    }
+  }
+
+  async function onPurge(kind: ItemKind, id: number, nome: string) {
+    if (!window.confirm(`Excluir "${nome}" de vez? Isso não tem volta.`)) {
+      return;
+    }
+    setError(null);
+    try {
+      if (kind === "folder") {
+        await purgeFolder(id);
+      } else {
+        await purgeFile(id);
+      }
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível excluir de vez.");
+    }
+  }
+
   if (!ready || !user) {
     return (
       <main className="drive-shell">
@@ -179,72 +330,100 @@ export function DrivePage() {
   }
 
   const empty = folders.length === 0 && files.length === 0;
+  const title = inTrash
+    ? "Lixeira"
+    : folderId === null
+      ? `Cofre de ${user.name}`
+      : (crumbs.at(-1)?.nome ?? "Pasta");
 
   return (
     <main className="drive-shell wide">
       <header className="topbar">
         <div>
           <p className="eyebrow">Home Drive</p>
-          <h1>{folderId === null ? `Cofre de ${user.name}` : crumbs.at(-1)?.nome ?? "Pasta"}</h1>
+          <h1>{title}</h1>
+          {inTrash ? (
+            <p className="hint">Itens somem após {ttlDays} dias.</p>
+          ) : null}
         </div>
-        <button type="button" className="ghost" onClick={() => void logout()}>
-          Sair
-        </button>
+        <div className="top-actions">
+          <button
+            type="button"
+            className={inTrash ? "ghost current-view" : "ghost"}
+            onClick={openTrash}
+          >
+            Lixeira
+          </button>
+          <button type="button" className="ghost" onClick={() => void logout()}>
+            Sair
+          </button>
+        </div>
       </header>
 
       <nav className="crumbs" aria-label="Caminho">
-        <button type="button" className={folderId === null ? "crumb current" : "crumb"} onClick={() => goTo(null)}>
+        <button type="button" className={!inTrash && folderId === null ? "crumb current" : "crumb"} onClick={() => goTo(null)}>
           Início
         </button>
-        {crumbs.map((crumb) => (
-          <span key={crumb.id} className="crumb-wrap">
-            <span className="sep" aria-hidden="true">
-              /
-            </span>
-            <button
-              type="button"
-              className={crumb.id === folderId ? "crumb current" : "crumb"}
-              onClick={() => goTo(crumb.id)}
-            >
-              {crumb.nome}
-            </button>
-          </span>
-        ))}
+        {!inTrash
+          ? crumbs.map((crumb) => (
+              <span key={crumb.id} className="crumb-wrap">
+                <span className="sep" aria-hidden="true">
+                  /
+                </span>
+                <button
+                  type="button"
+                  className={crumb.id === folderId ? "crumb current" : "crumb"}
+                  onClick={() => goTo(crumb.id)}
+                >
+                  {crumb.nome}
+                </button>
+              </span>
+            ))
+          : (
+              <span className="crumb-wrap">
+                <span className="sep" aria-hidden="true">
+                  /
+                </span>
+                <span className="crumb current">Lixeira</span>
+              </span>
+            )}
       </nav>
 
-      <section
-        className={drag ? "dropzone drag" : "dropzone"}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDrag(true);
-        }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={onDrop}
-      >
-        <p>Solte arquivos nesta pasta, ou</p>
-        <div className="drop-actions">
-          <button type="button" className="ghost" onClick={() => setNaming(true)}>
-            Nova pasta
-          </button>
-          <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}>
-            {busy ? "Enviando…" : "Enviar arquivos"}
-          </button>
-        </div>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          hidden
-          onChange={(e) => {
-            if (e.target.files) {
-              void sendFiles(e.target.files);
-              e.target.value = "";
-            }
+      {!inTrash ? (
+        <section
+          className={drag ? "dropzone drag" : "dropzone"}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
           }}
-        />
-      </section>
+          onDragLeave={() => setDrag(false)}
+          onDrop={onDrop}
+        >
+          <p>Solte arquivos nesta pasta, ou</p>
+          <div className="drop-actions">
+            <button type="button" className="ghost" onClick={() => setNaming(true)}>
+              Nova pasta
+            </button>
+            <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}>
+              {busy ? "Enviando…" : "Enviar arquivos"}
+            </button>
+          </div>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) {
+                void sendFiles(e.target.files);
+                e.target.value = "";
+              }
+            }}
+          />
+        </section>
+      ) : null}
 
-      {naming ? (
+      {naming && !inTrash ? (
         <form className="new-folder" onSubmit={(e) => void onCreateFolder(e)}>
           <input
             type="text"
@@ -269,23 +448,86 @@ export function DrivePage() {
         </form>
       ) : null}
 
+      {renaming ? (
+        <form className="new-folder" onSubmit={(e) => void onRename(e)}>
+          <input
+            type="text"
+            value={renaming.nome}
+            onChange={(e) => setRenaming({ ...renaming, nome: e.target.value })}
+            placeholder="Novo nome"
+            maxLength={80}
+            autoFocus
+            required
+          />
+          <button type="submit">Salvar</button>
+          <button type="button" className="ghost" onClick={() => setRenaming(null)}>
+            Cancelar
+          </button>
+        </form>
+      ) : null}
+
       {error ? <p className="error">{error}</p> : null}
 
       {empty ? (
-        <p className="empty">Pasta vazia. Crie um diretório ou envie um arquivo.</p>
+        <p className="empty">
+          {inTrash ? "Lixeira vazia." : "Pasta vazia. Crie um diretório ou envie um arquivo."}
+        </p>
       ) : (
         <ul className="drive-grid">
           {folders.map((folder) => (
             <li key={`d-${folder.id}`}>
-              <button type="button" className="tile folder" onClick={() => openFolder(folder)}>
-                <div className="tile-thumb kind-folder">
-                  <FolderMark />
+              <div className="tile">
+                <button
+                  type="button"
+                  className="tile-hit"
+                  onClick={() => openFolder(folder)}
+                  disabled={inTrash}
+                >
+                  <div className="tile-thumb kind-folder">
+                    <FolderMark />
+                  </div>
+                  <div className="tile-meta">
+                    <strong title={folder.nome}>{folder.nome}</strong>
+                    <span>{inTrash ? ttlLabel(folder.expires_at) : "Pasta"}</span>
+                  </div>
+                </button>
+                <div className="tile-actions">
+                  {inTrash ? (
+                    <>
+                      <button type="button" className="ghost" onClick={() => void onRestore("folder", folder.id)}>
+                        Restaurar
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void onPurge("folder", folder.id, folder.nome)}
+                      >
+                        Excluir de vez
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setRenaming({ kind: "folder", id: folder.id, nome: folder.nome })}
+                      >
+                        Renomear
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setMoving({ kind: "folder", id: folder.id, nome: folder.nome })}
+                      >
+                        Mover
+                      </button>
+                      <button type="button" className="danger" onClick={() => void onTrash("folder", folder.id)}>
+                        Lixeira
+                      </button>
+                    </>
+                  )}
                 </div>
-                <div className="tile-meta">
-                  <strong>{folder.nome}</strong>
-                  <span>Pasta</span>
-                </div>
-              </button>
+              </div>
             </li>
           ))}
           {files.map((file) => (
@@ -295,17 +537,67 @@ export function DrivePage() {
                   <MediaThumb file={file} blobUrl={thumbs[file.id]} onNeedBlob={needBlob} />
                   <div className="tile-meta">
                     <strong title={file.nome}>{file.nome}</strong>
-                    <span>{formatBytes(file.tamanho_bytes)}</span>
+                    <span>
+                      {inTrash
+                        ? `${formatBytes(file.tamanho_bytes)} · ${ttlLabel(file.expires_at)}`
+                        : formatBytes(file.tamanho_bytes)}
+                    </span>
                   </div>
                 </button>
-                <button type="button" className="tile-dl" onClick={() => void onDownload(file)}>
-                  Baixar
-                </button>
+                <div className="tile-actions">
+                  {inTrash ? (
+                    <>
+                      <button type="button" className="ghost" onClick={() => void onRestore("file", file.id)}>
+                        Restaurar
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void onPurge("file", file.id, file.nome)}
+                      >
+                        Excluir de vez
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="ghost" onClick={() => void onDownload(file)}>
+                        Baixar
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setRenaming({ kind: "file", id: file.id, nome: file.nome })}
+                      >
+                        Renomear
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setMoving({ kind: "file", id: file.id, nome: file.nome })}
+                      >
+                        Mover
+                      </button>
+                      <button type="button" className="danger" onClick={() => void onTrash("file", file.id)}>
+                        Lixeira
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </li>
           ))}
         </ul>
       )}
+
+      {moving ? (
+        <MovePicker
+          item={moving}
+          startId={folderId}
+          startCrumbs={crumbs}
+          onCancel={() => setMoving(null)}
+          onConfirm={(dest) => void onMove(dest)}
+        />
+      ) : null}
 
       {preview ? (
         <div className="lightbox" onClick={() => setPreview(null)} role="presentation">
@@ -325,6 +617,119 @@ export function DrivePage() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function MovePicker({
+  item,
+  startId,
+  startCrumbs,
+  onCancel,
+  onConfirm,
+}: {
+  item: Moving;
+  startId: number | null;
+  startCrumbs: DriveFolder[];
+  onCancel: () => void;
+  onConfirm: (dest: number | null) => void;
+}) {
+  const [here, setHere] = useState<number | null>(startId);
+  const [path, setPath] = useState<DriveFolder[]>(startCrumbs);
+  const [folders, setFolders] = useState<DriveFolder[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const next = await listFolders(here);
+        if (!cancelled) {
+          setFolders(next.filter((folder) => !(item.kind === "folder" && folder.id === item.id)));
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof ApiError ? err.message : "Falha ao listar pastas.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [here, item]);
+
+  function go(id: number | null) {
+    if (id === null) {
+      setPath([]);
+      setHere(null);
+      return;
+    }
+    setPath((prev) => {
+      const index = prev.findIndex((crumb) => crumb.id === id);
+      return index >= 0 ? prev.slice(0, index + 1) : prev;
+    });
+    setHere(id);
+  }
+
+  return (
+    <div className="lightbox" onClick={onCancel} role="presentation">
+      <div className="lightbox-card move-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <header>
+          <strong>Mover “{item.nome}”</strong>
+          <button type="button" className="ghost" onClick={onCancel}>
+            Fechar
+          </button>
+        </header>
+        <nav className="crumbs" aria-label="Destino">
+          <button type="button" className={here === null ? "crumb current" : "crumb"} onClick={() => go(null)}>
+            Início
+          </button>
+          {path.map((crumb) => (
+            <span key={crumb.id} className="crumb-wrap">
+              <span className="sep" aria-hidden="true">
+                /
+              </span>
+              <button
+                type="button"
+                className={crumb.id === here ? "crumb current" : "crumb"}
+                onClick={() => go(crumb.id)}
+              >
+                {crumb.nome}
+              </button>
+            </span>
+          ))}
+        </nav>
+        {error ? <p className="error">{error}</p> : null}
+        {folders.length === 0 ? (
+          <p className="empty">Nenhuma subpasta aqui.</p>
+        ) : (
+          <ul className="move-list">
+            {folders.map((folder) => (
+              <li key={folder.id}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setPath((prev) => [...prev, folder]);
+                    setHere(folder.id);
+                  }}
+                >
+                  {folder.nome}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="drop-actions">
+          <button type="button" onClick={() => onConfirm(here)}>
+            Mover para cá
+          </button>
+          <button type="button" className="ghost" onClick={onCancel}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

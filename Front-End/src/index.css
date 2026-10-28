@@ -362,6 +362,60 @@ input:not([type]) {
   font-size: 0.8rem;
 }
 
+.top-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+button.ghost.current-view {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid #5c3a36;
+}
+
+.tile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0.7rem 0.7rem;
+}
+
+.tile-actions button {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+}
+
+.tile-hit:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.move-card {
+  width: min(100%, 520px);
+}
+
+.move-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.move-list button {
+  width: 100%;
+  text-align: left;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;

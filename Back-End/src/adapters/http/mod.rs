@@ -2,6 +2,8 @@
 pub mod auth;
 pub mod files_route;
 pub mod folders_route;
+pub mod json_map;
+pub mod trash_route;
 pub mod health_route;
 pub mod list_users_route;
 pub mod login_route;

@@ -60,6 +60,18 @@ impl FileStore for FsStore {
             }
         }
     }
+
+    async fn remove(&self, owner: UserId, key: &str) -> Result<(), Erro> {
+        let path = self.blob_path(owner, key)?;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => {
+                eprintln!("fs: {e}");
+                Err(Erro::Interno)
+            }
+        }
+    }
 }
 
 impl FsStore {

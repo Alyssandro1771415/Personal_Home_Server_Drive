@@ -15,7 +15,7 @@ impl<R: FolderRepoBd> ListFolders<R> {
     ) -> Result<Vec<Folder>, Erro> {
         if let Some(parent) = parent_id {
             let folder = self.repo.get(parent).await?.ok_or(Erro::NaoEncontrado)?;
-            if folder.owner_id != owner {
+            if folder.owner_id != owner || folder.trashed_at.is_some() {
                 return Err(Erro::NaoEncontrado);
             }
         }

@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+
 use super::users::UserId;
 
 #[derive(Clone, Copy)]
@@ -15,6 +17,7 @@ pub struct StoredFile {
     pub mime: Option<String>,
     pub tamanho_bytes: i64,
     pub storage_key: String,
+    pub trashed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone)]
@@ -23,4 +26,5 @@ pub struct Folder {
     pub owner_id: UserId,
     pub parent_id: Option<FolderId>,
     pub nome: String,
+    pub trashed_at: Option<DateTime<Utc>>,
 }

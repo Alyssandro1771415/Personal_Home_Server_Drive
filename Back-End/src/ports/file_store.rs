@@ -15,4 +15,5 @@ pub trait FileStore: Send + Sync {
         owner: UserId,
         key: &str,
     ) -> impl Future<Output = Result<Vec<u8>, Erro>> + Send;
+    fn remove(&self, owner: UserId, key: &str) -> impl Future<Output = Result<(), Erro>> + Send;
 }

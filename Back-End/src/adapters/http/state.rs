@@ -6,6 +6,8 @@ use crate::adapters::db::postgres_files::PostgresFiles;
 use crate::adapters::db::postgres_folders::PostgresFolders;
 use crate::adapters::db::postgres_users::PostgresUsers;
 use crate::adapters::fs::FsStore;
+use chrono::Duration;
+
 use crate::domain::{Dek, UserId};
 
 #[derive(Clone)]
@@ -22,4 +24,5 @@ pub struct AppState {
     pub store: FsStore,
     pub crypto: AesGcmCrypto,
     pub sessions: Arc<Mutex<HashMap<String, Session>>>,
+    pub trash_ttl: Duration,
 }

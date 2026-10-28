@@ -6,9 +6,13 @@ use crate::adapters::db::postgres_users::PostgresUsers;
 use crate::adapters::fs::FsStore;
 use crate::adapters::http;
 use crate::adapters::http::state::AppState;
+use crate::use_cases::purge_expired::PurgeExpired;
 
+use chrono::Duration;
 use std::env;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 pub async fn run() {
     let env_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
@@ -30,13 +34,38 @@ pub async fn run() {
         })
         .unwrap_or_else(|_| manifest_dir.join("storage"));
 
+    let trash_days: i64 = env::var("TRASH_TTL_DAYS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|d: &i64| *d > 0)
+        .unwrap_or(30);
+
+    let files = PostgresFiles::new(pool.clone());
+    let folders = PostgresFolders::new(pool.clone());
+    let store = FsStore::new(storage_root);
+    let trash_ttl = Duration::days(trash_days);
+
+    let purge = PurgeExpired {
+        files: Arc::new(files.clone()),
+        folders: Arc::new(folders.clone()),
+        store: Arc::new(store.clone()),
+        ttl: trash_ttl,
+    };
+    tokio::spawn(async move {
+        loop {
+            let _ = purge.execute().await;
+            tokio::time::sleep(StdDuration::from_secs(600)).await;
+        }
+    });
+
     let state = AppState {
-        users: PostgresUsers::new(pool.clone()),
-        files: PostgresFiles::new(pool.clone()),
-        folders: PostgresFolders::new(pool),
-        store: FsStore::new(storage_root),
+        users: PostgresUsers::new(pool),
+        files,
+        folders,
+        store,
         crypto: AesGcmCrypto,
         sessions: Default::default(),
+        trash_ttl,
     };
 
     let app = http::router(state);
