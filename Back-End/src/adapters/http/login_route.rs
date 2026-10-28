@@ -3,14 +3,14 @@ use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{Erro, UserId};
+use crate::domain::Erro;
 use crate::use_cases::login::GetHashVal;
 
-use super::state::AppState;
+use super::state::{AppState, Session};
 
 #[derive(Deserialize)]
 struct LoginJson {
-    user_id: i64,
+    nome: String,
     password: String,
 }
 
@@ -32,12 +32,14 @@ async fn login(
 ) -> Result<(StatusCode, Json<LoginResponse>), (StatusCode, Json<LoginResponse>)> {
     let uc = GetHashVal {
         repo: Arc::new(state.users.clone()),
+        crypto: Arc::new(state.crypto),
     };
 
-    uc.execute(UserId(payload.user_id), payload.password)
+    let (user_id, dek) = uc
+        .execute(payload.nome, payload.password)
         .await
         .map_err(|err| match err {
-            Erro::NaoAutorizado => (
+            Erro::NaoAutorizado | Erro::Validacao | Erro::Conflito => (
                 StatusCode::UNAUTHORIZED,
                 Json(LoginResponse {
                     status_code: StatusCode::UNAUTHORIZED.as_u16(),
@@ -45,7 +47,7 @@ async fn login(
                     token: None,
                 }),
             ),
-            Erro::Interno => (
+            Erro::Interno | Erro::NaoEncontrado => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(LoginResponse {
                     status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
@@ -60,7 +62,7 @@ async fn login(
         .sessions
         .lock()
         .expect("sessions")
-        .insert(token.clone(), UserId(payload.user_id));
+        .insert(token.clone(), Session { user_id, dek });
 
     Ok((
         StatusCode::OK,

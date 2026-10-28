@@ -23,3 +23,6 @@ target
 
 # Ambient vars files
 .env
+
+# Encrypted user vaults on disk
+storage/

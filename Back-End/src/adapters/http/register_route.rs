@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::Erro;
 use crate::use_cases::register::Register;
 
 use super::state::AppState;
@@ -27,13 +28,21 @@ async fn register(
     Json(payload): Json<RegisterJson>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), StatusCode> {
     let uc = Register {
-        repo: Arc::new(state.users),
+        repo: Arc::new(state.users.clone()),
+        crypto: Arc::new(state.crypto),
+        store: Arc::new(state.store.clone()),
     };
 
     let id = uc
         .execute(payload.nome, payload.password)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| match err {
+            Erro::Validacao => StatusCode::BAD_REQUEST,
+            Erro::Conflito => StatusCode::CONFLICT,
+            Erro::Interno | Erro::NaoAutorizado | Erro::NaoEncontrado => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
 
     Ok((
         StatusCode::CREATED,

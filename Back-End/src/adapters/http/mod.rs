@@ -1,4 +1,6 @@
 //! Adapter HTTP (Axum). Entra request, chama use case, devolve JSON.
+pub mod auth;
+pub mod files_route;
 pub mod health_route;
 pub mod list_users_route;
 pub mod login_route;

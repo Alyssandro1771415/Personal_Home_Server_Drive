@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::use_cases::list_users_bd::ListUsers;
 
+use super::auth::AuthUser;
 use super::state::AppState;
 
 #[derive(Serialize)]
@@ -19,6 +20,7 @@ pub fn users_routes() -> Router<AppState> {
 
 async fn list_users(
     State(state): State<AppState>,
+    _auth: AuthUser,
 ) -> Result<Json<Vec<UserJson>>, StatusCode> {
     let uc = ListUsers {
         repo: Arc::new(state.users),
