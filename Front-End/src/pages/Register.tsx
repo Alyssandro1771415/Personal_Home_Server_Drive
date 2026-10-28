@@ -30,7 +30,7 @@ export function RegisterPage() {
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <p className="eyebrow">Servidor local</p>
+        <p className="eyebrow">Cofre local</p>
         <h1>Criar cofre</h1>
         <p className="lede">Um nome e uma senha. Os arquivos ficam cifrados só para você.</p>
         <form onSubmit={(e) => void onSubmit(e)}>

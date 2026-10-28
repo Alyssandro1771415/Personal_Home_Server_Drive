@@ -26,6 +26,12 @@ import {
 import { useAuth } from "../auth";
 import { MediaThumb, loadBlobUrl } from "../components/MediaThumb";
 import { fileKind } from "../media";
+import {
+  ensureFolderPath,
+  itemsFromDataTransfer,
+  itemsFromFileList,
+  type UploadItem,
+} from "../uploadTree";
 
 function formatBytes(n: number): string {
   if (n < 1024) {
@@ -83,7 +89,7 @@ export function DrivePage() {
   const [inTrash, setInTrash] = useState(false);
   const [ttlDays, setTtlDays] = useState(30);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
   const [naming, setNaming] = useState(false);
   const [newName, setNewName] = useState("");
@@ -92,6 +98,7 @@ export function DrivePage() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const blobCache = useRef(new Map<number, string>());
 
   const refresh = useCallback(async () => {
@@ -142,31 +149,54 @@ export function DrivePage() {
     return <Navigate to="/login" replace />;
   }
 
-  async function sendFiles(list: FileList | File[]) {
-    const batch = Array.from(list);
-    if (batch.length === 0) {
+  async function sendItems(items: UploadItem[]) {
+    if (items.length === 0) {
       return;
     }
-    setBusy(true);
     setError(null);
+    const cache = new Map<string, DriveFolder[]>();
+    const total = items.length;
+    setBusy(`Enviando 0/${total}…`);
     try {
-      for (const file of batch) {
-        await uploadFile(file, folderId);
+      let done = 0;
+      for (const item of items) {
+        const dest = await ensureFolderPath(folderId, item.dirs, cache);
+        if (item.file) {
+          await uploadFile(item.file, dest);
+        }
+        done += 1;
+        setBusy(`Enviando ${done}/${total}…`);
       }
       await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Falha no envio.");
+      await refresh();
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  function onDragOver(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!inTrash) {
+      setDrag(true);
+    }
+  }
+
+  function onDragLeave(event: DragEvent<HTMLElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+      setDrag(false);
     }
   }
 
   function onDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDrag(false);
-    if (!inTrash) {
-      void sendFiles(event.dataTransfer.files);
+    if (inTrash) {
+      return;
     }
+    void itemsFromDataTransfer(event.dataTransfer).then((items) => sendItems(items));
   }
 
   async function onDownload(file: DriveFile) {
@@ -337,10 +367,15 @@ export function DrivePage() {
       : (crumbs.at(-1)?.nome ?? "Pasta");
 
   return (
-    <main className="drive-shell wide">
+    <main
+      className={drag && !inTrash ? "drive-shell wide dropping" : "drive-shell wide"}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <header className="topbar">
         <div>
-          <p className="eyebrow">Home Drive</p>
+          <p className="eyebrow">Cofre local</p>
           <h1>{title}</h1>
           {inTrash ? (
             <p className="hint">Itens somem após {ttlDays} dias.</p>
@@ -390,22 +425,22 @@ export function DrivePage() {
       </nav>
 
       {!inTrash ? (
-        <section
-          className={drag ? "dropzone drag" : "dropzone"}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDrag(true);
-          }}
-          onDragLeave={() => setDrag(false)}
-          onDrop={onDrop}
-        >
-          <p>Solte arquivos nesta pasta, ou</p>
+        <section className={drag ? "dropzone drag" : "dropzone"}>
+          <p>{busy ?? "Solte arquivos ou pastas nesta pasta, ou"}</p>
           <div className="drop-actions">
             <button type="button" className="ghost" onClick={() => setNaming(true)}>
               Nova pasta
             </button>
-            <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}>
-              {busy ? "Enviando…" : "Enviar arquivos"}
+            <button type="button" disabled={Boolean(busy)} onClick={() => inputRef.current?.click()}>
+              Enviar arquivos
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={Boolean(busy)}
+              onClick={() => folderInputRef.current?.click()}
+            >
+              Enviar pasta
             </button>
           </div>
           <input
@@ -415,7 +450,23 @@ export function DrivePage() {
             hidden
             onChange={(e) => {
               if (e.target.files) {
-                void sendFiles(e.target.files);
+                void sendItems(itemsFromFileList(e.target.files));
+                e.target.value = "";
+              }
+            }}
+          />
+          <input
+            ref={(el) => {
+              folderInputRef.current = el;
+              el?.setAttribute("webkitdirectory", "");
+              el?.setAttribute("directory", "");
+            }}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) {
+                void sendItems(itemsFromFileList(e.target.files));
                 e.target.value = "";
               }
             }}
@@ -738,9 +789,10 @@ function FolderMark() {
     <svg viewBox="0 0 64 48" className="folder-svg" aria-hidden="true">
       <path
         d="M4 12c0-3 2-5 5-5h16l6 6h24c3 0 5 2 5 5v21c0 3-2 5-5 5H9c-3 0-5-2-5-5V12z"
-        fill="#d4a054"
+        fill="currentColor"
+        opacity="0.55"
       />
-      <path d="M4 20h56v19c0 3-2 5-5 5H9c-3 0-5-2-5-5V20z" fill="#b8893f" />
+      <path d="M4 20h56v19c0 3-2 5-5 5H9c-3 0-5-2-5-5V20z" fill="currentColor" />
     </svg>
   );
 }
