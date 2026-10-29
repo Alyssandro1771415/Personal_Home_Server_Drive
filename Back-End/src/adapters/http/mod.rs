@@ -9,6 +9,7 @@ pub mod list_users_route;
 pub mod login_route;
 pub mod register_route;
 pub mod router_register;
+pub mod search_route;
 pub mod state;
 
 pub use router_register::router;

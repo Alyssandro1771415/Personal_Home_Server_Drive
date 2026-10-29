@@ -100,6 +100,21 @@ impl FileRepoBd for PostgresFiles {
         Ok(rows.into_iter().map(from_row).collect())
     }
 
+    async fn list_all_active(&self, owner: UserId) -> Result<Vec<StoredFile>, Erro> {
+        let rows = sqlx::query_as::<_, FileRow>(&format!(
+            "SELECT {FILE_COLS}
+             FROM files
+             WHERE owner_id = $1 AND trashed_at IS NULL
+             ORDER BY lower(nome), id"
+        ))
+        .bind(owner.0 as i32)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+
+        Ok(rows.into_iter().map(from_row).collect())
+    }
+
     async fn get(&self, id: FileId) -> Result<Option<StoredFile>, Erro> {
         let row =
             sqlx::query_as::<_, FileRow>(&format!("SELECT {FILE_COLS} FROM files WHERE id = $1"))

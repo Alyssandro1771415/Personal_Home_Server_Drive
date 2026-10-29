@@ -237,6 +237,7 @@ export function FileViewer({
             <span>
               {files.length > 1 ? `${index + 1} / ${files.length} · ` : ""}
               {formatBytes(file.tamanho_bytes)}
+              {file.location ? ` · ${file.location}` : ""}
             </span>
           </div>
           <div className="viewer-actions">

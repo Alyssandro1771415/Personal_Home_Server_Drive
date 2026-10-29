@@ -7,7 +7,8 @@ pub mod users;
 
 pub use error::Erro;
 pub use files::{
-    dedupe_name, guess_mime, validate_name, FileId, Folder, FolderId, StoredFile, TRASH_DIR_NAME,
+    classify_file, dedupe_name, guess_mime, matches_search, normalize_search, validate_name,
+    EntryKindFilter, FileCategory, FileId, Folder, FolderId, StoredFile, TRASH_DIR_NAME,
 };
 pub use user_secret::UserSecret;
 pub use users::{User, UserId};

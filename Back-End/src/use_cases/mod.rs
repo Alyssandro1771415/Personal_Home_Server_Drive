@@ -13,6 +13,7 @@ pub mod mutate_folder;
 pub mod purge_expired;
 pub mod register;
 pub mod reset_password;
+pub mod search_drive;
 pub mod storage_paths;
 pub mod sync_disk;
 pub mod upload_file;

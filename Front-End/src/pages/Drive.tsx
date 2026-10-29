@@ -17,16 +17,25 @@ import {
   renameFolder,
   restoreFile,
   restoreFolder,
+  searchDrive,
   trashFile,
   trashFolder,
   uploadFile,
   type DriveFile,
   type DriveFolder,
+  type SearchListing,
 } from "../api";
 import { useAuth } from "../auth";
 import { FileViewer } from "../components/FileViewer";
 import { MediaThumb, loadBlobUrl } from "../components/MediaThumb";
-import { formatBytes } from "../media";
+import {
+  FILTER_OPTIONS,
+  fileCategory,
+  formatBytes,
+  matchesSearch,
+  normalizeSearch,
+  type EntryFilterKind,
+} from "../media";
 import {
   ensureFolderPath,
   itemsFromDataTransfer,
@@ -49,6 +58,7 @@ function ttlLabel(expiresAt?: string): string {
 }
 
 type ItemKind = "file" | "folder";
+type SearchScope = "global" | "current";
 
 type Moving = {
   kind: ItemKind;
@@ -61,6 +71,28 @@ type Renaming = {
   id: number;
   nome: string;
 };
+
+function filterLocal(
+  sourceFolders: DriveFolder[],
+  sourceFiles: DriveFile[],
+  rawQuery: string,
+  kind: EntryFilterKind,
+): SearchListing {
+  const norm = normalizeSearch(rawQuery);
+  const nextFolders =
+    kind === "all" || kind === "folder"
+      ? sourceFolders.filter((folder) => matchesSearch(folder.nome, norm))
+      : [];
+  const nextFiles =
+    kind === "folder"
+      ? []
+      : sourceFiles.filter(
+          (file) =>
+            (kind === "all" || fileCategory(file) === kind) &&
+            matchesSearch(file.nome, norm),
+        );
+  return { folders: nextFolders, files: nextFiles };
+}
 
 export function DrivePage() {
   const { user, ready, logout } = useAuth();
@@ -79,12 +111,23 @@ export function DrivePage() {
   const [moving, setMoving] = useState<Moving | null>(null);
   const [previewId, setPreviewId] = useState<number | null>(null);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<EntryFilterKind>("all");
+  const [searchScope, setSearchScope] = useState<SearchScope>("global");
+  const [globalResults, setGlobalResults] = useState<SearchListing | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const blobCache = useRef(new Map<number, string>());
 
   const refresh = useCallback(async () => {
     setError(null);
+    setReloadTick((n) => n + 1);
     try {
       if (inTrash) {
         const trash = await listTrash();
@@ -114,6 +157,73 @@ export function DrivePage() {
   }, [user, refresh]);
 
   useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setDebouncedQuery("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(trimmed);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    const active =
+      !inTrash &&
+      searchScope === "global" &&
+      (debouncedQuery.length > 0 || typeFilter !== "all");
+    if (!user || !active) {
+      setGlobalResults(null);
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSearching(true);
+    void searchDrive({ q: debouncedQuery, kind: typeFilter }, controller.signal)
+      .then((res) => {
+        if (!controller.signal.aborted) {
+          setGlobalResults(res);
+          setSearching(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setSearching(false);
+        setError(err instanceof ApiError ? err.message : "Falha ao pesquisar no Drive.");
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [user, inTrash, searchScope, debouncedQuery, typeFilter, reloadTick]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      if (previewId !== null || moving !== null || naming || renaming !== null) {
+        return;
+      }
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      searchInputRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewId, moving, naming, renaming]);
+
+  useEffect(() => {
     const cache = blobCache.current;
     return () => {
       cache.forEach((url) => URL.revokeObjectURL(url));
@@ -129,6 +239,19 @@ export function DrivePage() {
 
   if (ready && !user) {
     return <Navigate to="/login" replace />;
+  }
+
+  function clearSearchText() {
+    setSearchQuery("");
+    setDebouncedQuery("");
+  }
+
+  function clearFilters() {
+    setSearchQuery("");
+    setDebouncedQuery("");
+    setTypeFilter("all");
+    setGlobalResults(null);
+    setSearching(false);
   }
 
   async function sendItems(items: UploadItem[]) {
@@ -196,6 +319,10 @@ export function DrivePage() {
   }
 
   function goTo(id: number | null) {
+    clearSearchText();
+    if (searchScope === "global" || typeFilter === "folder") {
+      setTypeFilter("all");
+    }
     setInTrash(false);
     setRenaming(null);
     setPreviewId(null);
@@ -215,12 +342,30 @@ export function DrivePage() {
     if (inTrash) {
       return;
     }
+    clearSearchText();
+    if (searchScope === "global" || typeFilter === "folder") {
+      setTypeFilter("all");
+    }
     setPreviewId(null);
     setCrumbs((prev) => [...prev, folder]);
     setFolderId(folder.id);
   }
 
+  function openContainingFolder(targetFolderId: number | null) {
+    clearFilters();
+    setInTrash(false);
+    setRenaming(null);
+    setPreviewId(null);
+    if (targetFolderId === null) {
+      setCrumbs([]);
+      setFolderId(null);
+      return;
+    }
+    setFolderId(targetFolderId);
+  }
+
   function openTrash() {
+    clearFilters();
     setFolders([]);
     setFiles([]);
     setInTrash(true);
@@ -333,12 +478,41 @@ export function DrivePage() {
     );
   }
 
-  const empty = folders.length === 0 && files.length === 0;
+  const trimmedQuery = searchQuery.trim();
+  const hasActiveFilter = trimmedQuery.length > 0 || typeFilter !== "all";
+  const useGlobalSearch = !inTrash && searchScope === "global" && hasActiveFilter;
+  const isPendingGlobal = useGlobalSearch && (searching || trimmedQuery !== debouncedQuery);
+
+  const visibleListing = useGlobalSearch
+    ? globalResults
+      ? filterLocal(globalResults.folders, globalResults.files, trimmedQuery, typeFilter)
+      : filterLocal(folders, files, trimmedQuery, typeFilter)
+    : hasActiveFilter
+      ? filterLocal(folders, files, trimmedQuery, typeFilter)
+      : { folders, files };
+
+  const visibleFolders = visibleListing.folders;
+  const visibleFiles = visibleListing.files;
+  const empty = visibleFolders.length === 0 && visibleFiles.length === 0;
+  const totalResults = visibleFolders.length + visibleFiles.length;
+
   const title = inTrash
     ? "Lixeira"
     : folderId === null
       ? `Drive de ${user.name}`
       : (crumbs.at(-1)?.nome ?? "Pasta");
+
+  const searchPlaceholder = inTrash
+    ? "Pesquisar na lixeira…"
+    : searchScope === "global"
+      ? "Pesquisar arquivos e pastas em todo o Drive…"
+      : "Pesquisar nesta pasta…";
+
+  const scopeSummaryLabel = inTrash
+    ? "na lixeira"
+    : searchScope === "global"
+      ? "em todo o Drive"
+      : "nesta pasta";
 
   return (
     <main
@@ -370,32 +544,36 @@ export function DrivePage() {
       </header>
 
       <nav className="crumbs" aria-label="Caminho">
-        <button type="button" className={!inTrash && folderId === null ? "crumb current" : "crumb"} onClick={() => goTo(null)}>
+        <button
+          type="button"
+          className={!inTrash && folderId === null && !useGlobalSearch ? "crumb current" : "crumb"}
+          onClick={() => goTo(null)}
+        >
           Início
         </button>
-        {!inTrash
-          ? crumbs.map((crumb) => (
-              <span key={crumb.id} className="crumb-wrap">
-                <span className="sep" aria-hidden="true">
-                  /
-                </span>
-                <button
-                  type="button"
-                  className={crumb.id === folderId ? "crumb current" : "crumb"}
-                  onClick={() => goTo(crumb.id)}
-                >
-                  {crumb.nome}
-                </button>
+        {!inTrash ? (
+          crumbs.map((crumb) => (
+            <span key={crumb.id} className="crumb-wrap">
+              <span className="sep" aria-hidden="true">
+                /
               </span>
-            ))
-          : (
-              <span className="crumb-wrap">
-                <span className="sep" aria-hidden="true">
-                  /
-                </span>
-                <span className="crumb current">Lixeira</span>
-              </span>
-            )}
+              <button
+                type="button"
+                className={crumb.id === folderId && !useGlobalSearch ? "crumb current" : "crumb"}
+                onClick={() => goTo(crumb.id)}
+              >
+                {crumb.nome}
+              </button>
+            </span>
+          ))
+        ) : (
+          <span className="crumb-wrap">
+            <span className="sep" aria-hidden="true">
+              /
+            </span>
+            <span className="crumb current">Lixeira</span>
+          </span>
+        )}
       </nav>
 
       {!inTrash ? (
@@ -491,126 +669,292 @@ export function DrivePage() {
         </form>
       ) : null}
 
+      <section className="filter-bar" aria-label="Pesquisa e filtros">
+        <div className="search-row">
+          <div className="search-field">
+            <SearchMark />
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  if (searchQuery) {
+                    clearSearchText();
+                  } else {
+                    e.currentTarget.blur();
+                  }
+                }
+              }}
+              placeholder={searchPlaceholder}
+              aria-label="Pesquisar por nome"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                className="search-clear"
+                onClick={() => {
+                  clearSearchText();
+                  searchInputRef.current?.focus();
+                }}
+                aria-label="Limpar pesquisa"
+                title="Limpar pesquisa"
+              >
+                ×
+              </button>
+            ) : (
+              <kbd className="search-key" aria-hidden="true">
+                /
+              </kbd>
+            )}
+          </div>
+
+          {!inTrash ? (
+            <div className="scope-switch" role="group" aria-label="Escopo da busca">
+              <button
+                type="button"
+                className={searchScope === "global" ? "scope-btn active" : "scope-btn"}
+                aria-pressed={searchScope === "global"}
+                onClick={() => setSearchScope("global")}
+              >
+                Todo o Drive
+              </button>
+              <button
+                type="button"
+                className={searchScope === "current" ? "scope-btn active" : "scope-btn"}
+                aria-pressed={searchScope === "current"}
+                onClick={() => setSearchScope("current")}
+              >
+                Pasta atual
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="filter-chips-row">
+          <div className="type-chips" role="group" aria-label="Filtrar por tipo de arquivo">
+            {FILTER_OPTIONS.map((opt) => {
+              const active = typeFilter === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={active ? "type-chip active" : "type-chip"}
+                  aria-pressed={active}
+                  onClick={() => {
+                    if (opt.value !== typeFilter) {
+                      setGlobalResults(null);
+                      setTypeFilter(opt.value);
+                    } else if (opt.value !== "all") {
+                      setGlobalResults(null);
+                      setTypeFilter("all");
+                    }
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {hasActiveFilter ? (
+            <div className="filter-status">
+              <span>
+                {isPendingGlobal
+                  ? "Buscando…"
+                  : `${totalResults} ${totalResults === 1 ? "item" : "itens"} ${scopeSummaryLabel}`}
+              </span>
+              <button type="button" className="filter-reset" onClick={clearFilters}>
+                Limpar
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
       {error ? <p className="error">{error}</p> : null}
 
       {empty ? (
-        <p className="empty">
-          {inTrash ? "Lixeira vazia." : "Pasta vazia. Crie um diretório ou envie um arquivo."}
-        </p>
+        isPendingGlobal ? (
+          <p className="empty">Buscando em todo o Drive…</p>
+        ) : hasActiveFilter ? (
+          <div className="empty empty-filtered">
+            <p>Nenhum item encontrado {scopeSummaryLabel} para este filtro.</p>
+            <button type="button" className="ghost" onClick={clearFilters}>
+              Limpar pesquisa e filtros
+            </button>
+          </div>
+        ) : (
+          <p className="empty">
+            {inTrash ? "Lixeira vazia." : "Pasta vazia. Crie um diretório ou envie um arquivo."}
+          </p>
+        )
       ) : (
         <ul className="drive-grid">
-          {folders.map((folder) => (
-            <li key={`d-${folder.id}`}>
-              <div className="tile">
-                <button
-                  type="button"
-                  className="tile-hit"
-                  onClick={() => openFolder(folder)}
-                  disabled={inTrash}
-                >
-                  <div className="tile-thumb kind-folder">
-                    <FolderMark />
+          {visibleFolders.map((folder) => {
+            const folderSubtitle = inTrash
+              ? ttlLabel(folder.expires_at)
+              : folder.location
+                ? `Pasta · ${folder.location}`
+                : "Pasta";
+            return (
+              <li key={`d-${folder.id}`}>
+                <div className="tile">
+                  <button
+                    type="button"
+                    className="tile-hit"
+                    onClick={() => openFolder(folder)}
+                    disabled={inTrash}
+                  >
+                    <div className="tile-thumb kind-folder">
+                      <FolderMark />
+                    </div>
+                    <div className="tile-meta">
+                      <strong title={folder.nome}>{folder.nome}</strong>
+                      <span title={folderSubtitle}>{folderSubtitle}</span>
+                    </div>
+                  </button>
+                  <div className="tile-actions">
+                    {inTrash ? (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void onRestore("folder", folder.id)}
+                        >
+                          Restaurar
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void onPurge("folder", folder.id, folder.nome)}
+                        >
+                          Excluir de vez
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() =>
+                            setRenaming({ kind: "folder", id: folder.id, nome: folder.nome })
+                          }
+                        >
+                          Renomear
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() =>
+                            setMoving({ kind: "folder", id: folder.id, nome: folder.nome })
+                          }
+                        >
+                          Mover
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void onTrash("folder", folder.id)}
+                        >
+                          Lixeira
+                        </button>
+                      </>
+                    )}
                   </div>
-                  <div className="tile-meta">
-                    <strong title={folder.nome}>{folder.nome}</strong>
-                    <span>{inTrash ? ttlLabel(folder.expires_at) : "Pasta"}</span>
-                  </div>
-                </button>
-                <div className="tile-actions">
-                  {inTrash ? (
-                    <>
-                      <button type="button" className="ghost" onClick={() => void onRestore("folder", folder.id)}>
-                        Restaurar
-                      </button>
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => void onPurge("folder", folder.id, folder.nome)}
-                      >
-                        Excluir de vez
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => setRenaming({ kind: "folder", id: folder.id, nome: folder.nome })}
-                      >
-                        Renomear
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => setMoving({ kind: "folder", id: folder.id, nome: folder.nome })}
-                      >
-                        Mover
-                      </button>
-                      <button type="button" className="danger" onClick={() => void onTrash("folder", folder.id)}>
-                        Lixeira
-                      </button>
-                    </>
-                  )}
                 </div>
-              </div>
-            </li>
-          ))}
-          {files.map((file) => (
-            <li key={`f-${file.id}`}>
-              <div className="tile">
-                <button type="button" className="tile-hit" onClick={() => openPreview(file)}>
-                  <MediaThumb file={file} blobUrl={thumbs[file.id]} onNeedBlob={needBlob} />
-                  <div className="tile-meta">
-                    <strong title={file.nome}>{file.nome}</strong>
-                    <span>
-                      {inTrash
-                        ? `${formatBytes(file.tamanho_bytes)} · ${ttlLabel(file.expires_at)}`
-                        : formatBytes(file.tamanho_bytes)}
-                    </span>
+              </li>
+            );
+          })}
+          {visibleFiles.map((file) => {
+            const fileSubtitle = inTrash
+              ? `${formatBytes(file.tamanho_bytes)} · ${ttlLabel(file.expires_at)}`
+              : file.location
+                ? `${formatBytes(file.tamanho_bytes)} · ${file.location}`
+                : formatBytes(file.tamanho_bytes);
+            return (
+              <li key={`f-${file.id}`}>
+                <div className="tile">
+                  <button type="button" className="tile-hit" onClick={() => openPreview(file)}>
+                    <MediaThumb file={file} blobUrl={thumbs[file.id]} onNeedBlob={needBlob} />
+                    <div className="tile-meta">
+                      <strong title={file.nome}>{file.nome}</strong>
+                      <span title={fileSubtitle}>{fileSubtitle}</span>
+                    </div>
+                  </button>
+                  <div className="tile-actions">
+                    {inTrash ? (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void onRestore("file", file.id)}
+                        >
+                          Restaurar
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void onPurge("file", file.id, file.nome)}
+                        >
+                          Excluir de vez
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void onDownload(file)}
+                        >
+                          Baixar
+                        </button>
+                        {file.location ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => openContainingFolder(file.folder_id)}
+                            title={`Abrir pasta: ${file.location}`}
+                          >
+                            Pasta
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() =>
+                            setRenaming({ kind: "file", id: file.id, nome: file.nome })
+                          }
+                        >
+                          Renomear
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() =>
+                            setMoving({ kind: "file", id: file.id, nome: file.nome })
+                          }
+                        >
+                          Mover
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void onTrash("file", file.id)}
+                        >
+                          Lixeira
+                        </button>
+                      </>
+                    )}
                   </div>
-                </button>
-                <div className="tile-actions">
-                  {inTrash ? (
-                    <>
-                      <button type="button" className="ghost" onClick={() => void onRestore("file", file.id)}>
-                        Restaurar
-                      </button>
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => void onPurge("file", file.id, file.nome)}
-                      >
-                        Excluir de vez
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" className="ghost" onClick={() => void onDownload(file)}>
-                        Baixar
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => setRenaming({ kind: "file", id: file.id, nome: file.nome })}
-                      >
-                        Renomear
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => setMoving({ kind: "file", id: file.id, nome: file.nome })}
-                      >
-                        Mover
-                      </button>
-                      <button type="button" className="danger" onClick={() => void onTrash("file", file.id)}>
-                        Lixeira
-                      </button>
-                    </>
-                  )}
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -626,7 +970,7 @@ export function DrivePage() {
 
       {previewId !== null ? (
         <FileViewer
-          files={files}
+          files={visibleFiles}
           activeId={previewId}
           blobCache={blobCache.current}
           onNeedBlob={needBlob}
@@ -743,12 +1087,27 @@ function MovePicker({
           <button type="button" onClick={() => onConfirm(here)}>
             Mover para cá
           </button>
-          <button type="button" className="ghost" onClick={onCancel}>
+          <button type="button" onClick={onCancel} className="ghost">
             Cancelar
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+function SearchMark() {
+  return (
+    <svg viewBox="0 0 20 20" className="search-icon" aria-hidden="true">
+      <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M12.7 12.7L17 17"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

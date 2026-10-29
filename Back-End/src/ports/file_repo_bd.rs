@@ -21,6 +21,11 @@ pub trait FileRepoBd: Send + Sync {
         folder_id: Option<i64>,
     ) -> impl Future<Output = Result<Vec<StoredFile>, Erro>> + Send;
 
+    fn list_all_active(
+        &self,
+        owner: UserId,
+    ) -> impl Future<Output = Result<Vec<StoredFile>, Erro>> + Send;
+
     fn get(&self, id: FileId) -> impl Future<Output = Result<Option<StoredFile>, Erro>> + Send;
 
     fn get_by_storage_key(

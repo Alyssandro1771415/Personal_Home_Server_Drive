@@ -21,6 +21,8 @@ pub struct FileJson {
     pub tamanho_bytes: i64,
     pub folder_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub trashed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
@@ -31,6 +33,8 @@ pub struct FolderJson {
     pub id: i64,
     pub nome: String,
     pub parent_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trashed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,9 +48,16 @@ pub fn file_json(file: StoredFile, ttl: Duration) -> FileJson {
         mime: file.mime,
         tamanho_bytes: file.tamanho_bytes,
         folder_id: file.folder_id,
+        location: None,
         expires_at: file.trashed_at.map(|t| t + ttl),
         trashed_at: file.trashed_at,
     }
+}
+
+pub fn located_file_json(file: StoredFile, location: String, ttl: Duration) -> FileJson {
+    let mut json = file_json(file, ttl);
+    json.location = Some(location);
+    json
 }
 
 pub fn folder_json(folder: Folder, ttl: Duration) -> FolderJson {
@@ -54,9 +65,16 @@ pub fn folder_json(folder: Folder, ttl: Duration) -> FolderJson {
         id: folder.id.0,
         nome: folder.nome,
         parent_id: folder.parent_id.map(|p| p.0),
+        location: None,
         expires_at: folder.trashed_at.map(|t| t + ttl),
         trashed_at: folder.trashed_at,
     }
+}
+
+pub fn located_folder_json(folder: Folder, location: String, ttl: Duration) -> FolderJson {
+    let mut json = folder_json(folder, ttl);
+    json.location = Some(location);
+    json
 }
 
 pub fn map_err(err: crate::domain::Erro) -> axum::http::StatusCode {

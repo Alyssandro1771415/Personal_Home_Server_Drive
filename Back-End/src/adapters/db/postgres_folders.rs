@@ -74,6 +74,20 @@ impl FolderRepoBd for PostgresFolders {
         Ok(rows.into_iter().map(from_row).collect())
     }
 
+    async fn list_all_active(&self, owner: UserId) -> Result<Vec<Folder>, Erro> {
+        let rows = sqlx::query_as::<_, FolderRow>(&format!(
+            "SELECT {FOLDER_COLS}
+             FROM folders
+             WHERE owner_id = $1 AND trashed_at IS NULL
+             ORDER BY lower(nome), id"
+        ))
+        .bind(owner.0 as i32)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(rows.into_iter().map(from_row).collect())
+    }
+
     async fn get(&self, id: FolderId) -> Result<Option<Folder>, Erro> {
         let row =
             sqlx::query_as::<_, FolderRow>(&format!("SELECT {FOLDER_COLS} FROM folders WHERE id = $1"))

@@ -18,6 +18,11 @@ pub trait FolderRepoBd: Send + Sync {
         parent_id: Option<FolderId>,
     ) -> impl Future<Output = Result<Vec<Folder>, Erro>> + Send;
 
+    fn list_all_active(
+        &self,
+        owner: UserId,
+    ) -> impl Future<Output = Result<Vec<Folder>, Erro>> + Send;
+
     fn get(&self, id: FolderId) -> impl Future<Output = Result<Option<Folder>, Erro>> + Send;
 
     fn rename(&self, id: FolderId, nome: String) -> impl Future<Output = Result<(), Erro>> + Send;

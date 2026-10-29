@@ -281,13 +281,12 @@ No repositório do GitHub, acesse:
 
 ```bash
 cd ~/Personal_Home_Server_Drive
-set -a && . ./.env && . ./.release.env && set +a
 
-# Status e saúde dos 4 serviços
-docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+# Status e saúde dos 4 serviços (compatível com bash, sh e fish)
+docker compose --env-file .env --env-file .release.env -f docker-compose.yml -f docker-compose.prod.yml ps
 
 # Logs recentes
-docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail=100
+docker compose --env-file .env --env-file .release.env -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail=100
 
 # Histórico de releases aplicadas
 cat .deploy-history.log

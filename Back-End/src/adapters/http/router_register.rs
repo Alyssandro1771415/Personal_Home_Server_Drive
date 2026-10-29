@@ -12,6 +12,7 @@ use super::health_route::health;
 use super::list_users_route::users_routes;
 use super::login_route::login_routes;
 use super::register_route::register_routes;
+use super::search_route::search_routes;
 use super::state::AppState;
 use super::trash_route::trash_routes;
 
@@ -46,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes())
         .merge(files_routes())
         .merge(folders_routes())
+        .merge(search_routes())
         .merge(trash_routes())
         .layer(DefaultBodyLimit::max(max_upload_bytes()))
         .layer(cors())

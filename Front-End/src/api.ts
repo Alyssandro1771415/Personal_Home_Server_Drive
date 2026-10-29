@@ -1,3 +1,5 @@
+import type { EntryFilterKind } from "./media";
+
 const TOKEN_KEY = "home-drive-token";
 
 export type User = {
@@ -11,6 +13,7 @@ export type DriveFile = {
   mime: string | null;
   tamanho_bytes: number;
   folder_id: number | null;
+  location?: string;
   trashed_at?: string;
   expires_at?: string;
 };
@@ -19,8 +22,14 @@ export type DriveFolder = {
   id: number;
   nome: string;
   parent_id: number | null;
+  location?: string;
   trashed_at?: string;
   expires_at?: string;
+};
+
+export type SearchListing = {
+  folders: DriveFolder[];
+  files: DriveFile[];
 };
 
 export type TrashListing = {
@@ -279,6 +288,37 @@ export async function listTrash(): Promise<TrashListing> {
     throw await parseError(res);
   }
   return res.json() as Promise<TrashListing>;
+}
+
+export async function searchDrive(
+  params: {
+    q?: string;
+    kind?: EntryFilterKind;
+    folderId?: number | null;
+    recursive?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<SearchListing> {
+  const sp = new URLSearchParams();
+  const trimmed = params.q?.trim() ?? "";
+  if (trimmed) {
+    sp.set("q", trimmed);
+  }
+  if (params.kind && params.kind !== "all") {
+    sp.set("kind", params.kind);
+  }
+  if (params.folderId !== undefined && params.folderId !== null) {
+    sp.set("folder_id", String(params.folderId));
+  }
+  if (params.recursive !== undefined) {
+    sp.set("recursive", String(params.recursive));
+  }
+  const qs = sp.toString();
+  const res = await request(`/search${qs ? `?${qs}` : ""}`, { signal });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return res.json() as Promise<SearchListing>;
 }
 
 export function daysLeft(expiresAt?: string): number | null {

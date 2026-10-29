@@ -320,7 +320,7 @@ jobs:
             -o UserKnownHostsFile=~/.ssh/known_hosts \
             -o ConnectTimeout=15 \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "echo 'Conexão SSH validada com sucesso via Tailscale.'"
+            "/bin/sh -c 'echo \"Conexão SSH validada com sucesso via Tailscale.\"'"
         env:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
@@ -336,7 +336,36 @@ jobs:
           DEPLOY_PATH="${SERVER_DEPLOY_PATH:-/home/${SERVER_USER}/Personal_Home_Server_Drive}"
           REMOTE_BUNDLE="/tmp/pd-bundle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
 
-          tar -czf /tmp/deploy-bundle.tar.gz \
+          BUNDLE_STAGE="$(mktemp -d /tmp/pd-bundle-stage.XXXXXX)"
+          trap 'rm -rf "$BUNDLE_STAGE" /tmp/deploy-bundle.tar.gz' EXIT
+
+          mkdir -p "$BUNDLE_STAGE/scripts"
+          cp docker-compose.yml \
+             docker-compose.prod.yml \
+             database.sql \
+             .env.example \
+             "$BUNDLE_STAGE/"
+          cp scripts/db-backup.sh \
+             scripts/deploy-remote.sh \
+             scripts/rollback.sh \
+             "$BUNDLE_STAGE/scripts/"
+
+          sh_quote() {
+            printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+          }
+
+          {
+            printf 'export DEPLOY_PATH=%s\n' "$(sh_quote "$DEPLOY_PATH")"
+            printf 'export BUNDLE_PATH=%s\n' "$(sh_quote "$REMOTE_BUNDLE")"
+            printf 'export GHCR_USER=%s\n' "$(sh_quote "$GHCR_USER")"
+            printf 'export GHCR_IMAGE_PREFIX=%s\n' "$(sh_quote "$GHCR_IMAGE_PREFIX")"
+            printf 'export IMAGE_TAG=%s\n' "$(sh_quote "$IMAGE_TAG")"
+            printf 'export COMMIT_SHA=%s\n' "$(sh_quote "$GITHUB_SHA")"
+          } > "$BUNDLE_STAGE/deploy-vars.sh"
+          chmod 600 "$BUNDLE_STAGE/deploy-vars.sh"
+
+          tar -czf /tmp/deploy-bundle.tar.gz -C "$BUNDLE_STAGE" \
+            deploy-vars.sh \
             docker-compose.yml \
             docker-compose.prod.yml \
             database.sql \
@@ -360,21 +389,13 @@ jobs:
             /tmp/deploy-bundle.tar.gz \
             "${SERVER_USER}@${SERVER_HOST}:${REMOTE_BUNDLE}"
 
+          # Invoca /bin/sh explicitamente sem escapes nem sintaxe específica de login shell,
+          # garantindo compatibilidade caso o shell padrão do usuário remoto seja fish, zsh ou sh.
+          REMOTE_CMD="/bin/sh -c 'set -eu; umask 077; d=\$(mktemp -d /tmp/pd-boot.XXXXXX); trap \"rm -rf \$d ${REMOTE_BUNDLE}\" EXIT INT TERM; tar -xzf ${REMOTE_BUNDLE} -C \"\$d\" deploy-vars.sh scripts/deploy-remote.sh; . \"\$d/deploy-vars.sh\"; /bin/sh \"\$d/scripts/deploy-remote.sh\"'"
+
           printf '%s\n' "$GHCR_TOKEN" | ssh -p "$PORT" "${SSH_COMMON_OPTS[@]}" \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "set -eu; \
-             umask 077; \
-             TMP_SCRIPT=\$(mktemp /tmp/pd-deploy.XXXXXX); \
-             trap 'rm -f \"\$TMP_SCRIPT\"' EXIT INT TERM; \
-             tar -xzOf $(printf '%q' "$REMOTE_BUNDLE") scripts/deploy-remote.sh > \"\$TMP_SCRIPT\"; \
-             chmod 700 \"\$TMP_SCRIPT\"; \
-             DEPLOY_PATH=$(printf '%q' "$DEPLOY_PATH") \
-             BUNDLE_PATH=$(printf '%q' "$REMOTE_BUNDLE") \
-             GHCR_USER=$(printf '%q' "$GHCR_USER") \
-             GHCR_IMAGE_PREFIX=$(printf '%q' "$GHCR_IMAGE_PREFIX") \
-             IMAGE_TAG=$(printf '%q' "$IMAGE_TAG") \
-             COMMIT_SHA=$(printf '%q' "$GITHUB_SHA") \
-             sh \"\$TMP_SCRIPT\""
+            "$REMOTE_CMD"
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
