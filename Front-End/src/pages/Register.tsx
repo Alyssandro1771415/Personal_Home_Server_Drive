@@ -30,9 +30,9 @@ export function RegisterPage() {
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <p className="eyebrow">Cofre local</p>
-        <h1>Criar cofre</h1>
-        <p className="lede">Um nome e uma senha. Os arquivos ficam cifrados só para você.</p>
+        <p className="eyebrow">Drive local</p>
+        <h1>Criar conta</h1>
+        <p className="lede">Um nome e uma senha. Pastas e arquivos ficam salvos direto no disco do servidor.</p>
         <form onSubmit={(e) => void onSubmit(e)}>
           <label htmlFor="nome">Nome</label>
           <input

@@ -6,7 +6,6 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 
-use crate::domain::Dek;
 use crate::domain::UserId;
 use crate::ports::UserRepoBd;
 
@@ -15,7 +14,6 @@ use super::state::AppState;
 pub struct AuthUser {
     pub id: UserId,
     pub token: String,
-    pub dek: Dek,
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -48,7 +46,6 @@ impl FromRequestParts<AppState> for AuthUser {
         Ok(AuthUser {
             id: session.user_id,
             token,
-            dek: session.dek,
         })
     }
 }

@@ -30,9 +30,9 @@ export function LoginPage() {
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <p className="eyebrow">Cofre local</p>
+        <p className="eyebrow">Drive local</p>
         <h1>Home Drive</h1>
-        <p className="lede">Entre para abrir os arquivos cifrados.</p>
+        <p className="lede">Entre para acessar suas pastas e arquivos no servidor.</p>
         <form onSubmit={(e) => void onSubmit(e)}>
           <label htmlFor="nome">Nome</label>
           <input

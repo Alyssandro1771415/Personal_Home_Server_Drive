@@ -35,17 +35,24 @@ pub fn files_routes() -> Router<AppState> {
     Router::new()
         .route("/files", post(upload).get(list_files))
         .route("/files/{id}/content", get(download))
-        .route("/files/{id}", axum::routing::patch(patch_file).delete(trash_file))
+        .route(
+            "/files/{id}",
+            axum::routing::patch(patch_file).delete(trash_file),
+        )
         .route("/files/{id}/restore", post(restore_file))
         .route("/files/{id}/purge", delete(purge_file))
 }
 
-fn mutate(state: &AppState) -> MutateFile<
+fn mutate(
+    state: &AppState,
+) -> MutateFile<
+    crate::adapters::db::postgres_users::PostgresUsers,
     crate::adapters::db::postgres_files::PostgresFiles,
     crate::adapters::db::postgres_folders::PostgresFolders,
     crate::adapters::fs::FsStore,
 > {
     MutateFile {
+        users: Arc::new(state.users.clone()),
         files: Arc::new(state.files.clone()),
         folders: Arc::new(state.folders.clone()),
         store: Arc::new(state.store.clone()),
@@ -100,21 +107,14 @@ async fn upload(
         .unwrap_or_else(|| "unnamed".to_string());
 
     let uc = UploadFile {
+        users: Arc::new(state.users.clone()),
         repo: Arc::new(state.files.clone()),
         folders: Arc::new(state.folders.clone()),
-        crypto: Arc::new(state.crypto),
         store: Arc::new(state.store.clone()),
     };
 
     let file = uc
-        .execute(
-            auth.id,
-            &auth.dek,
-            folder_id.map(FolderId),
-            nome,
-            mime,
-            data,
-        )
+        .execute(auth.id, folder_id.map(FolderId), nome, mime, data)
         .await
         .map_err(map_err)?;
 
@@ -168,14 +168,10 @@ async fn download(
 ) -> Result<Response, StatusCode> {
     let uc = DownloadFile {
         repo: Arc::new(state.files.clone()),
-        crypto: Arc::new(state.crypto),
         store: Arc::new(state.store.clone()),
     };
 
-    let (file, bytes) = uc
-        .execute(auth.id, &auth.dek, FileId(id))
-        .await
-        .map_err(map_err)?;
+    let (file, bytes) = uc.execute(auth.id, FileId(id)).await.map_err(map_err)?;
 
     let mime = file
         .mime

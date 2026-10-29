@@ -1,50 +1,57 @@
 use std::sync::Arc;
 
-use crate::domain::{Dek, Erro, FolderId, StoredFile, UserId};
-use crate::ports::{Crypto, FileRepoBd, FileStore, FolderRepoBd};
+use crate::domain::{validate_name, Erro, FolderId, StoredFile, UserId};
+use crate::ports::{FileRepoBd, FileStore, FolderRepoBd, UserRepoBd};
+use crate::use_cases::storage_paths::{folder_rel_dir, pick_free_name, user_root};
 
-pub struct UploadFile<R, D, C, S> {
+const NOME_MAX: usize = 200;
+
+pub struct UploadFile<U, R, D, S> {
+    pub users: Arc<U>,
     pub repo: Arc<R>,
     pub folders: Arc<D>,
-    pub crypto: Arc<C>,
     pub store: Arc<S>,
 }
 
-impl<R: FileRepoBd, D: FolderRepoBd, C: Crypto, S: FileStore> UploadFile<R, D, C, S> {
+impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> UploadFile<U, R, D, S> {
     pub async fn execute(
         &self,
         owner: UserId,
-        dek: &Dek,
         folder_id: Option<FolderId>,
         nome: String,
         mime: Option<String>,
         plaintext: Vec<u8>,
     ) -> Result<StoredFile, Erro> {
-        let nome = nome.trim().to_string();
-        if nome.is_empty() {
-            return Err(Erro::Validacao);
-        }
-        if let Some(id) = folder_id {
-            let folder = self.folders.get(id).await?.ok_or(Erro::NaoEncontrado)?;
-            if folder.owner_id != owner {
-                return Err(Erro::NaoEncontrado);
-            }
-        }
+        // Remove qualquer prefixo de diretório caso o navegador envie caminho relativo no nome
+        let base = nome.rsplit(['/', '\\']).next().unwrap_or(&nome);
+        let clean_nome = validate_name(base, NOME_MAX)?;
 
-        let ciphertext = self.crypto.encrypt(dek, &plaintext)?;
-        let storage_key = uuid::Uuid::new_v4().to_string();
-        self.store.ensure_user_dir(owner).await?;
-        self.store.put(owner, &storage_key, &ciphertext).await?;
+        let root = user_root(&*self.users, owner).await?;
+        let parent_dir = folder_rel_dir(&*self.folders, owner, &root, folder_id).await?;
 
-        self.repo
+        let (final_nome, storage_key) =
+            pick_free_name(&*self.store, &parent_dir, &clean_nome, NOME_MAX).await?;
+
+        let size = plaintext.len() as i64;
+        self.store.put(&storage_key, &plaintext).await?;
+
+        match self
+            .repo
             .create(
                 owner,
                 folder_id.map(|id| id.0),
-                nome,
+                final_nome,
                 mime,
-                plaintext.len() as i64,
-                storage_key,
+                size,
+                storage_key.clone(),
             )
             .await
+        {
+            Ok(file) => Ok(file),
+            Err(err) => {
+                let _ = self.store.remove_file(&storage_key).await;
+                Err(err)
+            }
+        }
     }
 }

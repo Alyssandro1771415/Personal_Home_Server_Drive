@@ -16,6 +16,11 @@ impl PostgresFiles {
 }
 
 fn map_sqlx(e: sqlx::Error) -> Erro {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("23505") {
+            return Erro::Conflito;
+        }
+    }
     eprintln!("sqlx: {e}");
     Erro::Interno
 }
@@ -96,10 +101,21 @@ impl FileRepoBd for PostgresFiles {
     }
 
     async fn get(&self, id: FileId) -> Result<Option<StoredFile>, Erro> {
+        let row =
+            sqlx::query_as::<_, FileRow>(&format!("SELECT {FILE_COLS} FROM files WHERE id = $1"))
+                .bind(id.0 as i32)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+
+        Ok(row.map(from_row))
+    }
+
+    async fn get_by_storage_key(&self, storage_key: &str) -> Result<Option<StoredFile>, Erro> {
         let row = sqlx::query_as::<_, FileRow>(&format!(
-            "SELECT {FILE_COLS} FROM files WHERE id = $1"
+            "SELECT {FILE_COLS} FROM files WHERE storage_key = $1"
         ))
-        .bind(id.0 as i32)
+        .bind(storage_key)
         .fetch_optional(&self.pool)
         .await
         .map_err(map_sqlx)?;
@@ -107,33 +123,27 @@ impl FileRepoBd for PostgresFiles {
         Ok(row.map(from_row))
     }
 
-    async fn rename(&self, id: FileId, nome: String) -> Result<(), Erro> {
-        sqlx::query("UPDATE files SET nome = $2 WHERE id = $1")
-            .bind(id.0 as i32)
-            .bind(&nome)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(())
-    }
-
-    async fn set_folder(&self, id: FileId, folder_id: Option<i64>) -> Result<(), Erro> {
-        sqlx::query("UPDATE files SET folder_id = $2 WHERE id = $1")
-            .bind(id.0 as i32)
-            .bind(folder_id.map(|v| v as i32))
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(())
-    }
-
-    async fn set_trashed(&self, id: FileId, at: Option<DateTime<Utc>>) -> Result<(), Erro> {
-        sqlx::query("UPDATE files SET trashed_at = $2 WHERE id = $1")
-            .bind(id.0 as i32)
-            .bind(at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
+    async fn update_entry(
+        &self,
+        id: FileId,
+        folder_id: Option<i64>,
+        nome: String,
+        storage_key: String,
+        trashed_at: Option<DateTime<Utc>>,
+    ) -> Result<(), Erro> {
+        sqlx::query(
+            "UPDATE files
+             SET folder_id = $2, nome = $3, storage_key = $4, trashed_at = $5
+             WHERE id = $1",
+        )
+        .bind(id.0 as i32)
+        .bind(folder_id.map(|v| v as i32))
+        .bind(&nome)
+        .bind(&storage_key)
+        .bind(trashed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
         Ok(())
     }
 
@@ -156,13 +166,43 @@ impl FileRepoBd for PostgresFiles {
         Ok(())
     }
 
-    async fn restore_in_folders(&self, owner: UserId, folder_ids: &[i32]) -> Result<(), Erro> {
+    async fn restore_in_folders(
+        &self,
+        owner: UserId,
+        folder_ids: &[i32],
+        trashed_at: DateTime<Utc>,
+    ) -> Result<(), Erro> {
         sqlx::query(
             "UPDATE files SET trashed_at = NULL
-             WHERE owner_id = $1 AND folder_id = ANY($2)",
+             WHERE owner_id = $1 AND folder_id = ANY($2) AND trashed_at = $3",
         )
         .bind(owner.0 as i32)
         .bind(folder_ids)
+        .bind(trashed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(())
+    }
+
+    async fn replace_key_prefix_in_folders(
+        &self,
+        owner: UserId,
+        folder_ids: &[i32],
+        old_prefix: &str,
+        new_prefix: &str,
+    ) -> Result<(), Erro> {
+        sqlx::query(
+            "UPDATE files
+             SET storage_key = $4 || substring(storage_key FROM char_length($3) + 1)
+             WHERE owner_id = $1
+               AND folder_id = ANY($2)
+               AND starts_with(storage_key, $3)",
+        )
+        .bind(owner.0 as i32)
+        .bind(folder_ids)
+        .bind(old_prefix)
+        .bind(new_prefix)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;

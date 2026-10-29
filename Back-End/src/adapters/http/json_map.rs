@@ -60,12 +60,13 @@ pub fn folder_json(folder: Folder, ttl: Duration) -> FolderJson {
 }
 
 pub fn map_err(err: crate::domain::Erro) -> axum::http::StatusCode {
-    use axum::http::StatusCode;
     use crate::domain::Erro;
+    use axum::http::StatusCode;
     match err {
         Erro::Validacao => StatusCode::BAD_REQUEST,
         Erro::NaoEncontrado => StatusCode::NOT_FOUND,
         Erro::NaoAutorizado => StatusCode::UNAUTHORIZED,
-        Erro::Conflito | Erro::Interno => StatusCode::INTERNAL_SERVER_ERROR,
+        Erro::Conflito => StatusCode::CONFLICT,
+        Erro::Interno => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

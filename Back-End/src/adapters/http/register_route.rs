@@ -29,8 +29,10 @@ async fn register(
 ) -> Result<(StatusCode, Json<RegisterResponse>), StatusCode> {
     let uc = Register {
         repo: Arc::new(state.users.clone()),
-        crypto: Arc::new(state.crypto),
+        folders: Arc::new(state.folders.clone()),
+        files: Arc::new(state.files.clone()),
         store: Arc::new(state.store.clone()),
+        storage_root: state.store.root().to_path_buf(),
     };
 
     let id = uc

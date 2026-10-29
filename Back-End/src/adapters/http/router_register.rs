@@ -1,30 +1,32 @@
+use std::env;
+
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, Method};
+use axum::http::Method;
 use axum::{routing::get, Router};
-use tower_http::cors::{AllowHeaders, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
 use super::auth::auth_routes;
 use super::files_route::files_routes;
 use super::folders_route::folders_routes;
-use super::trash_route::trash_routes;
 use super::health_route::health;
 use super::list_users_route::users_routes;
 use super::login_route::login_routes;
 use super::register_route::register_routes;
 use super::state::AppState;
+use super::trash_route::trash_routes;
 
-const MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
+fn max_upload_bytes() -> usize {
+    let mb: usize = env::var("MAX_UPLOAD_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|m: &usize| *m > 0)
+        .unwrap_or(1024);
+    mb.saturating_mul(1024 * 1024)
+}
 
 fn cors() -> CorsLayer {
     CorsLayer::new()
-        .allow_origin([
-            HeaderValue::from_static("http://localhost:5173"),
-            HeaderValue::from_static("http://127.0.0.1:5173"),
-            HeaderValue::from_static("http://localhost:5174"),
-            HeaderValue::from_static("http://127.0.0.1:5174"),
-            HeaderValue::from_static("http://localhost:5175"),
-            HeaderValue::from_static("http://127.0.0.1:5175"),
-        ])
+        .allow_origin(AllowOrigin::mirror_request())
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -45,7 +47,7 @@ pub fn router(state: AppState) -> Router {
         .merge(files_routes())
         .merge(folders_routes())
         .merge(trash_routes())
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(DefaultBodyLimit::max(max_upload_bytes()))
         .layer(cors())
         .with_state(state)
 }

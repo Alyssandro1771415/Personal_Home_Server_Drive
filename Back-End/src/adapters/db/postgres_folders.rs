@@ -75,13 +75,12 @@ impl FolderRepoBd for PostgresFolders {
     }
 
     async fn get(&self, id: FolderId) -> Result<Option<Folder>, Erro> {
-        let row = sqlx::query_as::<_, FolderRow>(&format!(
-            "SELECT {FOLDER_COLS} FROM folders WHERE id = $1"
-        ))
-        .bind(id.0 as i32)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx)?;
+        let row =
+            sqlx::query_as::<_, FolderRow>(&format!("SELECT {FOLDER_COLS} FROM folders WHERE id = $1"))
+                .bind(id.0 as i32)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
         Ok(row.map(from_row))
     }
 
@@ -124,6 +123,26 @@ impl FolderRepoBd for PostgresFolders {
         Ok(rows)
     }
 
+    async fn descendant_folders(&self, owner: UserId, id: FolderId) -> Result<Vec<Folder>, Erro> {
+        let rows = sqlx::query_as::<_, FolderRow>(&format!(
+            "WITH RECURSIVE tree AS (
+                SELECT {FOLDER_COLS} FROM folders WHERE id = $1 AND owner_id = $2
+                UNION ALL
+                SELECT f.id, f.owner_id, f.parent_id, f.nome, f.trashed_at
+                FROM folders f
+                JOIN tree t ON f.parent_id = t.id
+                WHERE f.owner_id = $2
+             )
+             SELECT {FOLDER_COLS} FROM tree"
+        ))
+        .bind(id.0 as i32)
+        .bind(owner.0 as i32)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(rows.into_iter().map(from_row).collect())
+    }
+
     async fn trash_ids(
         &self,
         owner: UserId,
@@ -143,12 +162,19 @@ impl FolderRepoBd for PostgresFolders {
         Ok(())
     }
 
-    async fn restore_ids(&self, owner: UserId, ids: &[i32]) -> Result<(), Erro> {
+    async fn restore_ids(
+        &self,
+        owner: UserId,
+        ids: &[i32],
+        trashed_at: DateTime<Utc>,
+    ) -> Result<(), Erro> {
         sqlx::query(
-            "UPDATE folders SET trashed_at = NULL WHERE owner_id = $1 AND id = ANY($2)",
+            "UPDATE folders SET trashed_at = NULL
+             WHERE owner_id = $1 AND id = ANY($2) AND trashed_at = $3",
         )
         .bind(owner.0 as i32)
         .bind(ids)
+        .bind(trashed_at)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;

@@ -354,7 +354,7 @@ export function DrivePage() {
   if (!ready || !user) {
     return (
       <main className="drive-shell">
-        <p className="muted">Abrindo cofre…</p>
+        <p className="muted">Abrindo drive…</p>
       </main>
     );
   }
@@ -363,7 +363,7 @@ export function DrivePage() {
   const title = inTrash
     ? "Lixeira"
     : folderId === null
-      ? `Cofre de ${user.name}`
+      ? `Drive de ${user.name}`
       : (crumbs.at(-1)?.nome ?? "Pasta");
 
   return (
@@ -375,7 +375,7 @@ export function DrivePage() {
     >
       <header className="topbar">
         <div>
-          <p className="eyebrow">Cofre local</p>
+          <p className="eyebrow">Drive local</p>
           <h1>{title}</h1>
           {inTrash ? (
             <p className="hint">Itens somem após {ttlDays} dias.</p>

@@ -23,18 +23,18 @@ pub trait FileRepoBd: Send + Sync {
 
     fn get(&self, id: FileId) -> impl Future<Output = Result<Option<StoredFile>, Erro>> + Send;
 
-    fn rename(&self, id: FileId, nome: String) -> impl Future<Output = Result<(), Erro>> + Send;
+    fn get_by_storage_key(
+        &self,
+        storage_key: &str,
+    ) -> impl Future<Output = Result<Option<StoredFile>, Erro>> + Send;
 
-    fn set_folder(
+    fn update_entry(
         &self,
         id: FileId,
         folder_id: Option<i64>,
-    ) -> impl Future<Output = Result<(), Erro>> + Send;
-
-    fn set_trashed(
-        &self,
-        id: FileId,
-        at: Option<DateTime<Utc>>,
+        nome: String,
+        storage_key: String,
+        trashed_at: Option<DateTime<Utc>>,
     ) -> impl Future<Output = Result<(), Erro>> + Send;
 
     fn trash_in_folders(
@@ -48,6 +48,15 @@ pub trait FileRepoBd: Send + Sync {
         &self,
         owner: UserId,
         folder_ids: &[i32],
+        trashed_at: DateTime<Utc>,
+    ) -> impl Future<Output = Result<(), Erro>> + Send;
+
+    fn replace_key_prefix_in_folders(
+        &self,
+        owner: UserId,
+        folder_ids: &[i32],
+        old_prefix: &str,
+        new_prefix: &str,
     ) -> impl Future<Output = Result<(), Erro>> + Send;
 
     fn list_trash(&self, owner: UserId) -> impl Future<Output = Result<Vec<StoredFile>, Erro>> + Send;

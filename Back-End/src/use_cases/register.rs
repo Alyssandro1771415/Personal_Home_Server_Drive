@@ -1,24 +1,28 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
 use argon2::Argon2;
 
-use crate::domain::{Erro, UserId};
-use crate::ports::{Crypto, FileStore, UserRepoBd};
+use crate::domain::{validate_name, Erro, User, UserId};
+use crate::ports::{FileRepoBd, FileStore, FolderRepoBd, UserRepoBd};
+use crate::use_cases::sync_disk::sync_user_from_disk;
 
 const NOME_MAX: usize = 50;
 const PASSWORD_MIN: usize = 8;
 
-pub struct Register<R, C, S> {
+pub struct Register<R, D, F, S> {
     pub repo: Arc<R>,
-    pub crypto: Arc<C>,
+    pub folders: Arc<D>,
+    pub files: Arc<F>,
     pub store: Arc<S>,
+    pub storage_root: PathBuf,
 }
 
-impl<R: UserRepoBd, C: Crypto, S: FileStore> Register<R, C, S> {
+impl<R: UserRepoBd, D: FolderRepoBd, F: FileRepoBd, S: FileStore> Register<R, D, F, S> {
     pub async fn execute(&self, nome: String, password: String) -> Result<UserId, Erro> {
-        let nome = nome.trim().to_string();
-        if nome.is_empty() || nome.len() > NOME_MAX || password.len() < PASSWORD_MIN {
+        let nome = validate_name(&nome, NOME_MAX)?;
+        if password.len() < PASSWORD_MIN {
             return Err(Erro::Validacao);
         }
 
@@ -28,11 +32,14 @@ impl<R: UserRepoBd, C: Crypto, S: FileStore> Register<R, C, S> {
             .map_err(|_| Erro::Interno)?
             .to_string();
 
-        let dek = self.crypto.generate_dek();
-        let wrapped = self.crypto.wrap_dek(&password, &dek)?;
+        let id = self.repo.create(nome.clone(), password_hash).await?;
+        self.store.ensure_dir(&nome).await?;
 
-        let id = self.repo.create(nome, password_hash, wrapped).await?;
-        self.store.ensure_user_dir(id).await?;
+        // Caso a pasta do usuário no disco já possua arquivos (ex: banco recriado do zero),
+        // reimporta automaticamente toda a árvore de pastas e arquivos!
+        let user = User { id, name: nome };
+        let _ = sync_user_from_disk(&self.storage_root, &user, &*self.folders, &*self.files).await;
+
         Ok(id)
     }
 }

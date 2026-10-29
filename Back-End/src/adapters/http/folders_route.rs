@@ -46,12 +46,16 @@ pub fn folders_routes() -> Router<AppState> {
         .route("/folders/{id}/purge", delete(purge_folder))
 }
 
-fn mutate(state: &AppState) -> MutateFolder<
+fn mutate(
+    state: &AppState,
+) -> MutateFolder<
+    crate::adapters::db::postgres_users::PostgresUsers,
     crate::adapters::db::postgres_folders::PostgresFolders,
     crate::adapters::db::postgres_files::PostgresFiles,
     crate::adapters::fs::FsStore,
 > {
     MutateFolder {
+        users: Arc::new(state.users.clone()),
         folders: Arc::new(state.folders.clone()),
         files: Arc::new(state.files.clone()),
         store: Arc::new(state.store.clone()),
@@ -84,7 +88,9 @@ async fn create_folder(
     Json(payload): Json<CreateFolderJson>,
 ) -> Result<(StatusCode, Json<FolderJson>), StatusCode> {
     let uc = CreateFolder {
+        users: Arc::new(state.users.clone()),
         repo: Arc::new(state.folders.clone()),
+        store: Arc::new(state.store.clone()),
     };
     let folder = uc
         .execute(auth.id, payload.parent_id.map(FolderId), payload.nome)

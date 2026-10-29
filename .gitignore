@@ -24,8 +24,9 @@ target
 # Ambient vars files
 .env
 
-# Encrypted user vaults on disk
+# Dados persistentes locais (pastas reais, banco Postgres e backups)
 storage/
+/data/
 
 # Front-End
 Front-End/node_modules/

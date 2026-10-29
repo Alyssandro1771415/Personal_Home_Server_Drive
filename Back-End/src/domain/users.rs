@@ -1,7 +1,7 @@
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UserId(pub i64);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct User {
     pub id: UserId,
     pub name: String,

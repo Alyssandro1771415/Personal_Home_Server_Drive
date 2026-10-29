@@ -34,6 +34,12 @@ pub trait FolderRepoBd: Send + Sync {
         id: FolderId,
     ) -> impl Future<Output = Result<Vec<i32>, Erro>> + Send;
 
+    fn descendant_folders(
+        &self,
+        owner: UserId,
+        id: FolderId,
+    ) -> impl Future<Output = Result<Vec<Folder>, Erro>> + Send;
+
     fn trash_ids(
         &self,
         owner: UserId,
@@ -45,6 +51,7 @@ pub trait FolderRepoBd: Send + Sync {
         &self,
         owner: UserId,
         ids: &[i32],
+        trashed_at: DateTime<Utc>,
     ) -> impl Future<Output = Result<(), Erro>> + Send;
 
     fn list_trash(&self, owner: UserId) -> impl Future<Output = Result<Vec<Folder>, Erro>> + Send;

@@ -32,10 +32,9 @@ async fn login(
 ) -> Result<(StatusCode, Json<LoginResponse>), (StatusCode, Json<LoginResponse>)> {
     let uc = GetHashVal {
         repo: Arc::new(state.users.clone()),
-        crypto: Arc::new(state.crypto),
     };
 
-    let (user_id, dek) = uc
+    let user_id = uc
         .execute(payload.nome, payload.password)
         .await
         .map_err(|err| match err {
@@ -62,7 +61,7 @@ async fn login(
         .sessions
         .lock()
         .expect("sessions")
-        .insert(token.clone(), Session { user_id, dek });
+        .insert(token.clone(), Session { user_id });
 
     Ok((
         StatusCode::OK,

@@ -28,6 +28,7 @@ async fn list_trash(
     auth: AuthUser,
 ) -> Result<Json<TrashJson>, axum::http::StatusCode> {
     let purger = PurgeExpired {
+        users: Arc::new(state.users.clone()),
         files: Arc::new(state.files.clone()),
         folders: Arc::new(state.folders.clone()),
         store: Arc::new(state.store.clone()),
