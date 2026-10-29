@@ -60,20 +60,27 @@ export function setToken(token: string | null): void {
   }
 }
 
-async function parseError(res: Response): Promise<ApiError> {
-  if (res.status === 401) {
+function apiErrorFromStatus(status: number): ApiError {
+  if (status === 401) {
     return new ApiError(401, "Não autorizado.");
   }
-  if (res.status === 404) {
+  if (status === 404) {
     return new ApiError(404, "Não encontrado.");
   }
-  if (res.status === 409) {
+  if (status === 409) {
     return new ApiError(409, "Esse nome já está em uso.");
   }
-  if (res.status === 400) {
+  if (status === 413) {
+    return new ApiError(413, "Arquivo excede o limite de tamanho permitido.");
+  }
+  if (status === 400) {
     return new ApiError(400, "Dados inválidos.");
   }
-  return new ApiError(res.status, "Erro no servidor.");
+  return new ApiError(status, "Erro no servidor.");
+}
+
+async function parseError(res: Response): Promise<ApiError> {
+  return apiErrorFromStatus(res.status);
 }
 
 function apiUrl(path: string): string {
@@ -188,20 +195,95 @@ export async function createFolder(
   return res.json() as Promise<DriveFolder>;
 }
 
-export async function uploadFile(
+export type UploadFileOptions = {
+  onProgress?: (loadedBytes: number, totalBytes: number) => void;
+  signal?: AbortSignal;
+};
+
+export function uploadFile(
   file: File,
   folderId: number | null,
+  options?: UploadFileOptions,
 ): Promise<DriveFile> {
   const body = new FormData();
   body.append("file", file);
   if (folderId !== null) {
     body.append("folder_id", String(folderId));
   }
-  const res = await request("/files", { method: "POST", body });
-  if (!res.ok) {
-    throw await parseError(res);
-  }
-  return res.json() as Promise<DriveFile>;
+
+  return new Promise<DriveFile>((resolve, reject) => {
+    if (options?.signal?.aborted) {
+      reject(new DOMException("Upload cancelado.", "AbortError"));
+      return;
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", apiUrl("/files"));
+    xhr.responseType = "text";
+
+    const token = getToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+
+    const onAbort = () => {
+      xhr.abort();
+    };
+    options?.signal?.addEventListener("abort", onAbort, { once: true });
+
+    const cleanup = () => {
+      options?.signal?.removeEventListener("abort", onAbort);
+    };
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!options?.onProgress) {
+        return;
+      }
+      if (file.size === 0) {
+        options.onProgress(0, 0);
+        return;
+      }
+      if (event.lengthComputable && event.total > 0) {
+        const ratio = Math.min(1, Math.max(0, event.loaded / event.total));
+        options.onProgress(Math.round(file.size * ratio), file.size);
+      } else {
+        options.onProgress(Math.min(file.size, event.loaded), file.size);
+      }
+    });
+
+    xhr.upload.addEventListener("load", () => {
+      options?.onProgress?.(file.size, file.size);
+    });
+
+    xhr.addEventListener("load", () => {
+      cleanup();
+      if (xhr.status === 401) {
+        setToken(null);
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as DriveFile);
+        } catch {
+          reject(new ApiError(xhr.status, "Resposta inválida do servidor."));
+        }
+        return;
+      }
+      reject(apiErrorFromStatus(xhr.status));
+    });
+
+    xhr.addEventListener("error", () => {
+      cleanup();
+      reject(new ApiError(0, "Falha de rede durante o envio."));
+    });
+
+    xhr.addEventListener("abort", () => {
+      cleanup();
+      reject(new DOMException("Upload cancelado.", "AbortError"));
+    });
+
+    options?.onProgress?.(0, file.size);
+    xhr.send(body);
+  });
 }
 
 export async function fetchFileBlob(id: number): Promise<Blob> {

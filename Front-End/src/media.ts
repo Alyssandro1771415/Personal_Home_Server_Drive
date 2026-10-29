@@ -308,3 +308,24 @@ export function formatBytes(n: number): string {
   }
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
 }
+
+export function formatTransferBytes(bytes: number): string {
+  const safe = Math.max(0, Math.floor(bytes));
+  if (safe < 1024) {
+    return `${safe} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = safe / 1024;
+  let i = 0;
+  while (i < units.length - 1) {
+    const decimals = i === 0 ? (value >= 10 ? 0 : 1) : i === 1 ? 1 : 2;
+    const factor = 10 ** decimals;
+    if (Math.round(value * factor) / factor < 1024) {
+      break;
+    }
+    value /= 1024;
+    i += 1;
+  }
+  const decimals = i === 0 ? (value >= 10 ? 0 : 1) : i === 1 ? 1 : 2;
+  return `${value.toFixed(decimals)} ${units[i]}`;
+}
