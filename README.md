@@ -40,3 +40,7 @@ Se você copiar pastas/arquivos diretamente para `./data/storage/<seu-usuario>/`
 ```bash
 docker compose exec -u 1000:1000 backend drive sync-disk
 ```
+
+## CI/CD e Deploy Automatizado
+
+O projeto conta com pipeline de CI/CD via GitHub Actions, GHCR, Tailscale e SSH. Consulte o guia completo de configuração, segurança e rollback em [`docs/DEPLOY.md`](docs/DEPLOY.md).

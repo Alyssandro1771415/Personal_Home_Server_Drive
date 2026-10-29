@@ -1,0 +1,13 @@
+# Override de produção utilizado pelo deploy automatizado (CI/CD via GHCR).
+# Mantém o docker-compose.yml original intacto para desenvolvimento/build local.
+#
+# Exemplo de uso manual no servidor:
+#   set -a && . ./.env && . ./.release.env && set +a
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --remove-orphans
+
+services:
+  backend:
+    image: ${GHCR_IMAGE_PREFIX:?Defina GHCR_IMAGE_PREFIX}/backend:${IMAGE_TAG:?Defina IMAGE_TAG}
+
+  frontend:
+    image: ${GHCR_IMAGE_PREFIX:?Defina GHCR_IMAGE_PREFIX}/frontend:${IMAGE_TAG:?Defina IMAGE_TAG}

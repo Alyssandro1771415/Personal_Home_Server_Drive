@@ -1,0 +1,390 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Forçar rebuild das imagens Docker mesmo sem alterações no código"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  ci-backend:
+    name: CI · Backend (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ci-backend-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências nativas (OpenSSL / pkg-config)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Configurar toolchain Rust estável
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de dependências Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "Back-End -> target"
+
+      - name: Verificar compilação (cargo check)
+        working-directory: Back-End
+        run: cargo check --locked --all-targets
+
+      - name: Executar testes automatizados (cargo test)
+        working-directory: Back-End
+        run: cargo test --locked
+
+  ci-frontend:
+    name: CI · Frontend (React / TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: ci-frontend-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: Front-End/package-lock.json
+
+      - name: Instalar dependências (npm ci)
+        working-directory: Front-End
+        run: npm ci
+
+      - name: Validar tipagem e gerar bundle (npm run build)
+        working-directory: Front-End
+        run: npm run build
+
+  publish-images:
+    name: CD · Build e Publicação no GHCR
+    needs:
+      - ci-backend
+      - ci-frontend
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ghcr-publish-${{ github.ref }}
+      cancel-in-progress: false
+    outputs:
+      image_prefix: ${{ steps.meta.outputs.image_prefix }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Calcular metadados e hashes de árvore dos serviços
+        id: meta
+        run: |
+          REPO_LOWER="$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_PREFIX="ghcr.io/${REPO_LOWER}"
+          IMAGE_TAG="sha-${GITHUB_SHA}"
+          BACKEND_TREE="tree-$(git rev-parse HEAD:Back-End)"
+          FRONTEND_TREE="tree-$(git rev-parse HEAD:Front-End)"
+
+          {
+            echo "image_prefix=${IMAGE_PREFIX}"
+            echo "image_tag=${IMAGE_TAG}"
+            echo "backend_tree=${BACKEND_TREE}"
+            echo "frontend_tree=${FRONTEND_TREE}"
+            echo "platforms=${IMAGE_PLATFORMS:-linux/amd64}"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_PLATFORMS: ${{ vars.IMAGE_PLATFORMS }}
+
+      - name: Validar configuração Docker Compose de produção
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+        env:
+          GHCR_IMAGE_PREFIX: ${{ steps.meta.outputs.image_prefix }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Autenticar no GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verificar se imagem do Backend já existe para a árvore atual
+        id: check_backend
+        run: |
+          if [ "${FORCE_REBUILD}" = "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if docker buildx imagetools inspect "${IMAGE_PREFIX}/backend:${BACKEND_TREE}" >/dev/null 2>&1; then
+            echo "Imagem do backend sem alterações de código (${BACKEND_TREE}); reutilizando manifesto existente."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          IMAGE_PREFIX: ${{ steps.meta.outputs.image_prefix }}
+          BACKEND_TREE: ${{ steps.meta.outputs.backend_tree }}
+
+      - name: Reutilizar imagem existente do Backend para o SHA atual
+        if: steps.check_backend.outputs.exists == 'true'
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE_PREFIX}/backend:${IMAGE_TAG}" \
+            -t "${IMAGE_PREFIX}/backend:main" \
+            "${IMAGE_PREFIX}/backend:${BACKEND_TREE}"
+        env:
+          IMAGE_PREFIX: ${{ steps.meta.outputs.image_prefix }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+          BACKEND_TREE: ${{ steps.meta.outputs.backend_tree }}
+
+      - name: Construir e publicar imagem do Backend
+        if: steps.check_backend.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Back-End
+          file: ./Back-End/Dockerfile
+          platforms: ${{ steps.meta.outputs.platforms }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_prefix }}/backend:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_prefix }}/backend:${{ steps.meta.outputs.backend_tree }}
+            ${{ steps.meta.outputs.image_prefix }}/backend:main
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Verificar se imagem do Frontend já existe para a árvore atual
+        id: check_frontend
+        run: |
+          if [ "${FORCE_REBUILD}" = "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if docker buildx imagetools inspect "${IMAGE_PREFIX}/frontend:${FRONTEND_TREE}" >/dev/null 2>&1; then
+            echo "Imagem do frontend sem alterações de código (${FRONTEND_TREE}); reutilizando manifesto existente."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          IMAGE_PREFIX: ${{ steps.meta.outputs.image_prefix }}
+          FRONTEND_TREE: ${{ steps.meta.outputs.frontend_tree }}
+
+      - name: Reutilizar imagem existente do Frontend para o SHA atual
+        if: steps.check_frontend.outputs.exists == 'true'
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE_PREFIX}/frontend:${IMAGE_TAG}" \
+            -t "${IMAGE_PREFIX}/frontend:main" \
+            "${IMAGE_PREFIX}/frontend:${FRONTEND_TREE}"
+        env:
+          IMAGE_PREFIX: ${{ steps.meta.outputs.image_prefix }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+          FRONTEND_TREE: ${{ steps.meta.outputs.frontend_tree }}
+
+      - name: Construir e publicar imagem do Frontend
+        if: steps.check_frontend.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Front-End
+          file: ./Front-End/Dockerfile
+          platforms: ${{ steps.meta.outputs.platforms }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_prefix }}/frontend:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_prefix }}/frontend:${{ steps.meta.outputs.frontend_tree }}
+            ${{ steps.meta.outputs.image_prefix }}/frontend:main
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    name: CD · Deploy no Servidor Doméstico
+    needs:
+      - publish-images
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: production-server-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Validar presença de Secrets e Variáveis obrigatórias
+        run: |
+          missing=0
+          for var_name in \
+            TS_OAUTH_CLIENT_ID \
+            TS_OAUTH_SECRET \
+            SERVER_SSH_KEY \
+            SERVER_SSH_KNOWN_HOSTS \
+            SERVER_HOST \
+            SERVER_USER
+          do
+            eval "val=\${$var_name:-}"
+            if [ -z "$val" ]; then
+              echo "::error::Configuração obrigatória ausente no GitHub Actions: ${var_name}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Cadastre todos os Secrets e Variáveis descritos em docs/DEPLOY.md antes de executar o deploy." >&2
+            exit 1
+          fi
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
+          SERVER_HOST: ${{ vars.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER }}
+
+      - name: Conectar temporariamente à Tailnet (nó efêmero tag:ci)
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Configurar cliente SSH e validar chave de host do servidor
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+
+          printf '%s\n' "$SERVER_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          printf '%s\n' "$SERVER_SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+
+          # Verifica integridade sintática da chave privada e do known_hosts sem expor conteúdo
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
+          ssh-keygen -l -f ~/.ssh/known_hosts >/dev/null
+
+          PORT="${SERVER_PORT:-22}"
+          if [ "$PORT" = "22" ]; then
+            HOST_LOOKUP="$SERVER_HOST"
+          else
+            HOST_LOOKUP="[${SERVER_HOST}]:${PORT}"
+          fi
+
+          if ! ssh-keygen -F "$HOST_LOOKUP" -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::SERVER_SSH_KNOWN_HOSTS não contém entrada válida para ${HOST_LOOKUP}."
+            exit 1
+          fi
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -p "$PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ConnectTimeout=15 \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "echo 'Conexão SSH validada com sucesso via Tailscale.'"
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
+          SERVER_HOST: ${{ vars.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER }}
+          SERVER_PORT: ${{ vars.SERVER_PORT }}
+
+      - name: Empacotar arquivos de runtime e executar deploy remoto
+        run: |
+          umask 077
+          PORT="${SERVER_PORT:-22}"
+          DEPLOY_PATH="${SERVER_DEPLOY_PATH:-/home/${SERVER_USER}/Personal_Home_Server_Drive}"
+          REMOTE_BUNDLE="/tmp/pd-bundle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
+
+          tar -czf /tmp/deploy-bundle.tar.gz \
+            docker-compose.yml \
+            docker-compose.prod.yml \
+            database.sql \
+            .env.example \
+            scripts/db-backup.sh \
+            scripts/deploy-remote.sh \
+            scripts/rollback.sh
+
+          SSH_COMMON_OPTS=(
+            -i ~/.ssh/deploy_key
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+
+          scp -P "$PORT" "${SSH_COMMON_OPTS[@]}" \
+            /tmp/deploy-bundle.tar.gz \
+            "${SERVER_USER}@${SERVER_HOST}:${REMOTE_BUNDLE}"
+
+          printf '%s\n' "$GHCR_TOKEN" | ssh -p "$PORT" "${SSH_COMMON_OPTS[@]}" \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "set -eu; \
+             umask 077; \
+             TMP_SCRIPT=\$(mktemp /tmp/pd-deploy.XXXXXX); \
+             trap 'rm -f \"\$TMP_SCRIPT\"' EXIT INT TERM; \
+             tar -xzOf $(printf '%q' "$REMOTE_BUNDLE") scripts/deploy-remote.sh > \"\$TMP_SCRIPT\"; \
+             chmod 700 \"\$TMP_SCRIPT\"; \
+             DEPLOY_PATH=$(printf '%q' "$DEPLOY_PATH") \
+             BUNDLE_PATH=$(printf '%q' "$REMOTE_BUNDLE") \
+             GHCR_USER=$(printf '%q' "$GHCR_USER") \
+             GHCR_IMAGE_PREFIX=$(printf '%q' "$GHCR_IMAGE_PREFIX") \
+             IMAGE_TAG=$(printf '%q' "$IMAGE_TAG") \
+             COMMIT_SHA=$(printf '%q' "$GITHUB_SHA") \
+             sh \"\$TMP_SCRIPT\""
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_IMAGE_PREFIX: ${{ needs.publish-images.outputs.image_prefix }}
+          IMAGE_TAG: ${{ needs.publish-images.outputs.image_tag }}
+          SERVER_HOST: ${{ vars.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER }}
+          SERVER_PORT: ${{ vars.SERVER_PORT }}
+          SERVER_DEPLOY_PATH: ${{ vars.SERVER_DEPLOY_PATH }}
+
+      - name: Limpar chaves SSH e artefatos temporários do runner
+        if: always()
+        run: |
+          rm -f ~/.ssh/deploy_key ~/.ssh/known_hosts /tmp/deploy-bundle.tar.gz

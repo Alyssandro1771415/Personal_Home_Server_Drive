@@ -23,6 +23,11 @@ target
 
 # Ambient vars files
 .env
+.env.*
+!.env.example
+.release.env
+.release.prev.env
+.deploy-history.log
 
 # Dados persistentes locais (pastas reais, banco Postgres e backups)
 storage/
