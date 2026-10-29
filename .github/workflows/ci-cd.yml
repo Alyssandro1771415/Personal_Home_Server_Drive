@@ -329,6 +329,7 @@ jobs:
           SERVER_PORT: ${{ vars.SERVER_PORT }}
 
       - name: Empacotar arquivos de runtime e executar deploy remoto
+        shell: bash
         run: |
           umask 077
           PORT="${SERVER_PORT:-22}"
