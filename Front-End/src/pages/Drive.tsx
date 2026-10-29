@@ -24,28 +24,15 @@ import {
   type DriveFolder,
 } from "../api";
 import { useAuth } from "../auth";
+import { FileViewer } from "../components/FileViewer";
 import { MediaThumb, loadBlobUrl } from "../components/MediaThumb";
-import { fileKind } from "../media";
+import { formatBytes } from "../media";
 import {
   ensureFolderPath,
   itemsFromDataTransfer,
   itemsFromFileList,
   type UploadItem,
 } from "../uploadTree";
-
-function formatBytes(n: number): string {
-  if (n < 1024) {
-    return `${n} B`;
-  }
-  const units = ["KB", "MB", "GB"];
-  let value = n / 1024;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
-}
 
 function ttlLabel(expiresAt?: string): string {
   const days = daysLeft(expiresAt);
@@ -60,11 +47,6 @@ function ttlLabel(expiresAt?: string): string {
   }
   return `${days} dias restantes`;
 }
-
-type Preview = {
-  file: DriveFile;
-  url: string;
-};
 
 type ItemKind = "file" | "folder";
 
@@ -95,7 +77,7 @@ export function DrivePage() {
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState<Renaming | null>(null);
   const [moving, setMoving] = useState<Moving | null>(null);
-  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewId, setPreviewId] = useState<number | null>(null);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -208,24 +190,15 @@ export function DrivePage() {
     }
   }
 
-  async function openPreview(file: DriveFile) {
-    const kind = fileKind(file);
-    if (kind === "other") {
-      await onDownload(file);
-      return;
-    }
+  function openPreview(file: DriveFile) {
     setError(null);
-    try {
-      const url = await needBlob(file.id);
-      setPreview({ file, url });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Falha ao abrir o arquivo.");
-    }
+    setPreviewId(file.id);
   }
 
   function goTo(id: number | null) {
     setInTrash(false);
     setRenaming(null);
+    setPreviewId(null);
     if (id === null) {
       setCrumbs([]);
       setFolderId(null);
@@ -242,6 +215,7 @@ export function DrivePage() {
     if (inTrash) {
       return;
     }
+    setPreviewId(null);
     setCrumbs((prev) => [...prev, folder]);
     setFolderId(folder.id);
   }
@@ -253,7 +227,7 @@ export function DrivePage() {
     setNaming(false);
     setRenaming(null);
     setMoving(null);
-    setPreview(null);
+    setPreviewId(null);
   }
 
   async function onCreateFolder(event: FormEvent) {
@@ -584,7 +558,7 @@ export function DrivePage() {
           {files.map((file) => (
             <li key={`f-${file.id}`}>
               <div className="tile">
-                <button type="button" className="tile-hit" onClick={() => void openPreview(file)}>
+                <button type="button" className="tile-hit" onClick={() => openPreview(file)}>
                   <MediaThumb file={file} blobUrl={thumbs[file.id]} onNeedBlob={needBlob} />
                   <div className="tile-meta">
                     <strong title={file.nome}>{file.nome}</strong>
@@ -650,22 +624,16 @@ export function DrivePage() {
         />
       ) : null}
 
-      {preview ? (
-        <div className="lightbox" onClick={() => setPreview(null)} role="presentation">
-          <div className="lightbox-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <header>
-              <strong>{preview.file.nome}</strong>
-              <button type="button" className="ghost" onClick={() => setPreview(null)}>
-                Fechar
-              </button>
-            </header>
-            {fileKind(preview.file) === "image" ? (
-              <img src={preview.url} alt={preview.file.nome} />
-            ) : (
-              <video src={preview.url} controls autoPlay />
-            )}
-          </div>
-        </div>
+      {previewId !== null ? (
+        <FileViewer
+          files={files}
+          activeId={previewId}
+          blobCache={blobCache.current}
+          onNeedBlob={needBlob}
+          onSelectId={setPreviewId}
+          onDownload={(file) => void onDownload(file)}
+          onClose={() => setPreviewId(null)}
+        />
       ) : null}
     </main>
   );

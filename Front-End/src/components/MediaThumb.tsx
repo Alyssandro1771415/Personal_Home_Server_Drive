@@ -49,7 +49,7 @@ export function MediaThumb({ file, blobUrl, onNeedBlob }: Props) {
   return (
     <div ref={hostRef} className={`tile-thumb kind-${kind}`}>
       {blobUrl && kind === "image" ? (
-        <img src={blobUrl} alt="" />
+        <img src={blobUrl} alt="" decoding="async" />
       ) : blobUrl && kind === "video" ? (
         <video src={`${blobUrl}#t=0.4`} muted playsInline preload="metadata" />
       ) : (
