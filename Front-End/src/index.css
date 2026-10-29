@@ -506,14 +506,16 @@ button.danger:hover:not(:disabled) {
   position: fixed;
   inset: 0;
   background: rgba(4, 5, 7, 0.82);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 1.5rem;
   z-index: 20;
 }
 
 .lightbox-card {
   width: min(100%, 920px);
+  max-width: 100%;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -533,17 +535,14 @@ button.danger:hover:not(:disabled) {
   font-weight: 500;
 }
 
-.lightbox-card img,
-.lightbox-card video {
-  width: 100%;
-  max-height: 72vh;
-  object-fit: contain;
-  background: #050608;
-  border-radius: 4px;
-}
-
 .lightbox-card.viewer-card {
   width: min(100%, 960px);
+  max-height: calc(100vh - 3rem);
+  max-height: calc(100dvh - 3rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
 .lightbox-card .viewer-header {
@@ -552,6 +551,7 @@ button.danger:hover:not(:disabled) {
   align-items: center;
   gap: 0.75rem;
   margin-bottom: 0.7rem;
+  flex-shrink: 0;
 }
 
 .viewer-title {
@@ -587,31 +587,41 @@ button.danger:hover:not(:disabled) {
 
 .viewer-stage {
   position: relative;
-  height: min(74vh, 640px);
-  height: min(74dvh, 640px);
+  width: 100%;
+  height: min(74vh, calc(100vh - 8.5rem), 680px);
+  height: min(74dvh, calc(100dvh - 8.5rem), 680px);
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
   background: #050608;
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
-  display: grid;
-  place-items: center;
   touch-action: pan-y pinch-zoom;
   user-select: none;
 }
 
 .viewer-media {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: grid;
-  place-items: center;
-  will-change: transform;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
 }
 
 .viewer-card .viewer-media img,
 .viewer-card .viewer-media video {
+  display: block;
   width: 100%;
   height: 100%;
+  max-width: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
   background: #050608;
   border-radius: 0;
@@ -787,6 +797,11 @@ button.danger:hover:not(:disabled) {
     padding: 0.65rem;
   }
 
+  .lightbox-card.viewer-card {
+    max-height: calc(100vh - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
+
   .lightbox-card .viewer-header {
     gap: 0.5rem;
     margin-bottom: 0.55rem;
@@ -806,8 +821,8 @@ button.danger:hover:not(:disabled) {
   }
 
   .viewer-stage {
-    height: 68vh;
-    height: 68dvh;
+    height: min(72vh, calc(100vh - 6rem));
+    height: min(72dvh, calc(100dvh - 6rem));
   }
 
   .viewer-nav {
