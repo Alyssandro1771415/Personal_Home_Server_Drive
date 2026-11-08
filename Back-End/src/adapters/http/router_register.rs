@@ -1,6 +1,7 @@
 use std::env;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::header::{ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE};
 use axum::http::Method;
 use axum::{routing::get, Router};
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
@@ -14,6 +15,7 @@ use super::login_route::login_routes;
 use super::register_route::register_routes;
 use super::search_route::search_routes;
 use super::state::AppState;
+use super::storage_route::storage_routes;
 use super::trash_route::trash_routes;
 
 fn max_upload_bytes() -> usize {
@@ -30,12 +32,19 @@ fn cors() -> CorsLayer {
         .allow_origin(AllowOrigin::mirror_request())
         .allow_methods([
             Method::GET,
+            Method::HEAD,
             Method::POST,
             Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])
         .allow_headers(AllowHeaders::mirror_request())
+        .expose_headers([
+            ACCEPT_RANGES,
+            CONTENT_RANGE,
+            CONTENT_LENGTH,
+            CONTENT_DISPOSITION,
+        ])
 }
 
 pub fn router(state: AppState) -> Router {
@@ -48,6 +57,7 @@ pub fn router(state: AppState) -> Router {
         .merge(files_routes())
         .merge(folders_routes())
         .merge(search_routes())
+        .merge(storage_routes())
         .merge(trash_routes())
         .layer(DefaultBodyLimit::max(max_upload_bytes()))
         .layer(cors())

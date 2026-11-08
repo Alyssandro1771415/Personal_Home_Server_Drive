@@ -201,14 +201,22 @@ export function extensionOf(nome: string): string {
 }
 
 export function fileKind(file: DriveFile): FileKind {
-  const mime = file.mime?.toLowerCase() ?? "";
+  return detectMediaKind(file.nome, file.mime);
+}
+
+export function localFileKind(file: { name: string; type?: string }): FileKind {
+  return detectMediaKind(file.name, file.type ?? null);
+}
+
+function detectMediaKind(nome: string, rawMime: string | null | undefined): FileKind {
+  const mime = rawMime?.toLowerCase() ?? "";
   if (mime.startsWith("image/")) {
     return "image";
   }
   if (mime.startsWith("video/")) {
     return "video";
   }
-  const ext = extensionOf(file.nome);
+  const ext = extensionOf(nome);
   if (PREVIEW_IMAGE_EXT.includes(ext)) {
     return "image";
   }
@@ -287,10 +295,10 @@ export function matchesSearch(nome: string, normalizedQuery: string): boolean {
 export function canAutoThumb(file: DriveFile): boolean {
   const kind = fileKind(file);
   if (kind === "image") {
-    return file.tamanho_bytes <= 12 * 1024 * 1024;
+    return file.tamanho_bytes <= 25 * 1024 * 1024;
   }
   if (kind === "video") {
-    return file.tamanho_bytes <= 8 * 1024 * 1024;
+    return true;
   }
   return false;
 }
@@ -299,7 +307,7 @@ export function formatBytes(n: number): string {
   if (n < 1024) {
     return `${n} B`;
   }
-  const units = ["KB", "MB", "GB"];
+  const units = ["KB", "MB", "GB", "TB"];
   let value = n / 1024;
   let i = 0;
   while (value >= 1024 && i < units.length - 1) {
@@ -307,6 +315,65 @@ export function formatBytes(n: number): string {
     i += 1;
   }
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
+}
+
+export function formatCapacityUnit(bytes: number): string {
+  const safe = Math.max(0, bytes);
+  if (safe < 1024) {
+    return `${Math.floor(safe)} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB", "PB"];
+  let value = safe / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  const decimals = value >= 100 ? 0 : 1;
+  const formatted = value.toFixed(decimals).replace(/\.0$/, "");
+  return `${formatted} ${units[i]}`;
+}
+
+export function formatStoragePair(usedBytes: number, totalBytes: number): string {
+  return `${formatCapacityUnit(usedBytes)} / ${formatCapacityUnit(totalBytes)}`;
+}
+
+export function cleanUploadFileName(raw: string): string {
+  const parts = raw.split(/[/\\]/);
+  const base = (parts[parts.length - 1] ?? raw).trim();
+  return base.slice(0, 200);
+}
+
+export function dedupeFileName(nome: string, attempt: number, maxLen = 200): string {
+  const suffixNum = ` (${attempt})`;
+  const dot = nome.lastIndexOf(".");
+  const hasExt = dot > 0 && dot < nome.length - 1;
+  const stem = hasExt ? nome.slice(0, dot) : nome;
+  const ext = hasExt ? nome.slice(dot) : "";
+  const full = `${stem}${suffixNum}${ext}`;
+  if (full.length <= maxLen) {
+    return full;
+  }
+  const keep = Math.max(1, maxLen - suffixNum.length - ext.length);
+  return `${stem.slice(0, keep)}${suffixNum}${ext}`;
+}
+
+export function suggestFreeFileName(
+  desired: string,
+  existingNames: Iterable<string>,
+  maxLen = 200,
+): string {
+  const taken = new Set(existingNames);
+  if (!taken.has(desired)) {
+    return desired;
+  }
+  for (let attempt = 1; attempt <= 9999; attempt += 1) {
+    const candidate = dedupeFileName(desired, attempt, maxLen);
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
+  }
+  return dedupeFileName(desired, Date.now() % 10000, maxLen);
 }
 
 export function formatTransferBytes(bytes: number): string {

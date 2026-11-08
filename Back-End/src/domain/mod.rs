@@ -8,7 +8,8 @@ pub mod users;
 pub use error::Erro;
 pub use files::{
     classify_file, dedupe_name, guess_mime, matches_search, normalize_search, validate_name,
-    EntryKindFilter, FileCategory, FileId, Folder, FolderId, StoredFile, TRASH_DIR_NAME,
+    DiskStats, EntryKindFilter, FileCategory, FileId, Folder, FolderId, StoredFile,
+    UploadConflictMode, TRASH_DIR_NAME,
 };
 pub use user_secret::UserSecret;
 pub use users::{User, UserId};

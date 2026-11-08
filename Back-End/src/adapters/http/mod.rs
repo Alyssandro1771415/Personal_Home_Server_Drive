@@ -11,5 +11,6 @@ pub mod register_route;
 pub mod router_register;
 pub mod search_route;
 pub mod state;
+pub mod storage_route;
 
 pub use router_register::router;

@@ -313,8 +313,11 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
+ "bytes",
  "chrono",
  "dotenvy",
+ "futures-util",
+ "libc",
  "serde",
  "sqlx",
  "tokio",

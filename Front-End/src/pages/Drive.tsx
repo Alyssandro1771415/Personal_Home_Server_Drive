@@ -1,11 +1,22 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
 import { Navigate } from "react-router-dom";
 import {
   ApiError,
+  batchMoveFiles,
   createFolder,
   daysLeft,
   downloadFile,
+  emptyTrash,
   folderPath,
+  getStorageStats,
   listFiles,
   listFolders,
   listTrash,
@@ -24,18 +35,38 @@ import {
   type DriveFile,
   type DriveFolder,
   type SearchListing,
+  type StorageStats,
 } from "../api";
 import { useAuth } from "../auth";
 import { FileViewer } from "../components/FileViewer";
-import { MediaThumb, loadBlobUrl } from "../components/MediaThumb";
+import { MediaThumb } from "../components/MediaThumb";
+import {
+  UploadConflictModal,
+  type ConflictResolution,
+} from "../components/UploadConflictModal";
+import { UploadPanel } from "../components/UploadPanel";
 import {
   FILTER_OPTIONS,
+  cleanUploadFileName,
   fileCategory,
   formatBytes,
+  formatStoragePair,
   matchesSearch,
   normalizeSearch,
+  suggestFreeFileName,
   type EntryFilterKind,
 } from "../media";
+import {
+  clearUploadState,
+  deleteQueuedFileBlob,
+  emptyUploadState,
+  getQueuedFileBlob,
+  loadUploadState,
+  putQueuedFileBlob,
+  saveUploadState,
+  type PersistedUploadState,
+  type UploadTaskRecord,
+} from "../uploadPersistence";
 import {
   ensureFolderPath,
   itemsFromDataTransfer,
@@ -60,16 +91,30 @@ function ttlLabel(expiresAt?: string): string {
 type ItemKind = "file" | "folder";
 type SearchScope = "global" | "current";
 
-type Moving = {
-  kind: ItemKind;
-  id: number;
-  nome: string;
-};
+type MovingTarget =
+  | {
+      mode: "single";
+      kind: ItemKind;
+      id: number;
+      nome: string;
+    }
+  | {
+      mode: "batch-files";
+      ids: number[];
+    };
 
 type Renaming = {
   kind: ItemKind;
   id: number;
   nome: string;
+};
+
+type ConflictPromptState = {
+  existingFile: DriveFile;
+  incomingFile: File;
+  suggestedName: string;
+  existingNames: Set<string>;
+  resolve: (resolution: ConflictResolution) => void;
 };
 
 function filterLocal(
@@ -94,6 +139,13 @@ function filterLocal(
   return { folders: nextFolders, files: nextFiles };
 }
 
+function makeTaskId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function DrivePage() {
   const { user, ready, logout } = useAuth();
   const [folderId, setFolderId] = useState<number | null>(null);
@@ -103,14 +155,25 @@ export function DrivePage() {
   const [inTrash, setInTrash] = useState(false);
   const [ttlDays, setTtlDays] = useState(30);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
   const [naming, setNaming] = useState(false);
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState<Renaming | null>(null);
-  const [moving, setMoving] = useState<Moving | null>(null);
+  const [moving, setMoving] = useState<MovingTarget | null>(null);
   const [previewId, setPreviewId] = useState<number | null>(null);
-  const [thumbs, setThumbs] = useState<Record<number, string>>({});
+  const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
+  const [emptyingTrash, setEmptyingTrash] = useState(false);
+
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
+  const [fileVersions, setFileVersions] = useState<Record<number, number>>({});
+
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<number>>(() => new Set());
+  const [lastSelectedFileId, setLastSelectedFileId] = useState<number | null>(null);
+
+  const [uploadState, setUploadState] = useState<PersistedUploadState>(emptyUploadState);
+  const [uploadingActive, setUploadingActive] = useState(false);
+  const [conflictPrompt, setConflictPrompt] = useState<ConflictPromptState | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -125,9 +188,48 @@ export function DrivePage() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const blobCache = useRef(new Map<number, string>());
 
+  const uploadStateRef = useRef<PersistedUploadState>(emptyUploadState());
+  const inMemoryFilesRef = useRef(new Map<string, File>());
+  const workerRunningRef = useRef(false);
+  const batchAbortRef = useRef<AbortController | null>(null);
+  const conflictResolverRef = useRef<((res: ConflictResolution) => void) | null>(null);
+  const folderIdRef = useRef<number | null>(null);
+  const inTrashRef = useRef(false);
+  const bootedUserIdRef = useRef<number | null>(null);
+
+  folderIdRef.current = folderId;
+  inTrashRef.current = inTrash;
+
+  const commitUploadState = useCallback(
+    (
+      updater:
+        | PersistedUploadState
+        | ((prev: PersistedUploadState) => PersistedUploadState),
+    ) => {
+      const next =
+        typeof updater === "function" ? updater(uploadStateRef.current) : updater;
+      uploadStateRef.current = next;
+      setUploadState(next);
+      if (user) {
+        saveUploadState(user.id, next);
+      }
+    },
+    [user],
+  );
+
+  const refreshStorage = useCallback(async () => {
+    try {
+      const stats = await getStorageStats();
+      setStorageStats(stats);
+    } catch {
+      // Mantém último valor conhecido silenciosamente caso falhe
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     setError(null);
     setReloadTick((n) => n + 1);
+    void refreshStorage();
     try {
       if (inTrash) {
         const trash = await listTrash();
@@ -148,13 +250,413 @@ export function DrivePage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Falha ao listar o diretório.");
     }
-  }, [folderId, inTrash]);
+  }, [folderId, inTrash, refreshStorage]);
+
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   useEffect(() => {
     if (user) {
       void refresh();
     }
   }, [user, refresh]);
+
+  const askConflictDecision = useCallback(
+    (
+      existingFile: DriveFile,
+      incomingFile: File,
+      suggestedName: string,
+      existingNames: Set<string>,
+    ): Promise<ConflictResolution> =>
+      new Promise<ConflictResolution>((resolve) => {
+        const finish = (res: ConflictResolution) => {
+          conflictResolverRef.current = null;
+          setConflictPrompt(null);
+          resolve(res);
+        };
+        conflictResolverRef.current = finish;
+        setConflictPrompt({
+          existingFile,
+          incomingFile,
+          suggestedName,
+          existingNames,
+          resolve: finish,
+        });
+      }),
+    [],
+  );
+
+  const bumpFileVersion = useCallback((id: number) => {
+    const cached = blobCache.current.get(id);
+    if (cached) {
+      URL.revokeObjectURL(cached);
+      blobCache.current.delete(id);
+    }
+    setFileVersions((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }));
+  }, []);
+
+  const runUploadWorker = useCallback(
+    async (userId: number) => {
+      if (workerRunningRef.current) {
+        return;
+      }
+      workerRunningRef.current = true;
+      setUploadingActive(true);
+
+      const abortController = new AbortController();
+      batchAbortRef.current = abortController;
+
+      const folderTreeCache = new Map<string, DriveFolder[]>();
+      const filesByFolderCache = new Map<string, DriveFile[]>();
+
+      async function getSiblings(targetFolderId: number | null): Promise<DriveFile[]> {
+        const key = targetFolderId === null ? "root" : String(targetFolderId);
+        let list = filesByFolderCache.get(key);
+        if (!list) {
+          list = await listFiles(targetFolderId);
+          filesByFolderCache.set(key, list);
+        }
+        return list;
+      }
+
+      try {
+        while (!abortController.signal.aborted) {
+          const nextTask = uploadStateRef.current.tasks.find(
+            (t) => t.status === "queued",
+          );
+          if (!nextTask) {
+            break;
+          }
+
+          if (nextTask.isFolderPlaceholder) {
+            try {
+              await ensureFolderPath(
+                nextTask.rootFolderId,
+                nextTask.dirs,
+                folderTreeCache,
+              );
+              commitUploadState((prev) => ({
+                ...prev,
+                totalUploadedCount: prev.totalUploadedCount + 1,
+                tasks: prev.tasks.map((t) =>
+                  t.id === nextTask.id
+                    ? { ...t, status: "done", resolution: "created" }
+                    : t,
+                ),
+              }));
+              if (!inTrashRef.current) {
+                void refreshRef.current();
+              }
+            } catch (err) {
+              const msg = err instanceof ApiError ? err.message : "Falha ao criar pasta.";
+              commitUploadState((prev) => ({
+                ...prev,
+                tasks: prev.tasks.map((t) =>
+                  t.id === nextTask.id ? { ...t, status: "error", errorMessage: msg } : t,
+                ),
+              }));
+            }
+            continue;
+          }
+
+          const file =
+            inMemoryFilesRef.current.get(nextTask.id) ??
+            (await getQueuedFileBlob(userId, nextTask.id));
+
+          if (!file) {
+            commitUploadState((prev) => ({
+              ...prev,
+              tasks: prev.tasks.map((t) =>
+                t.id === nextTask.id ? { ...t, status: "interrupted" } : t,
+              ),
+            }));
+            continue;
+          }
+
+          let destFolderId: number | null = nextTask.rootFolderId;
+          try {
+            destFolderId = await ensureFolderPath(
+              nextTask.rootFolderId,
+              nextTask.dirs,
+              folderTreeCache,
+            );
+
+            const siblings = await getSiblings(destFolderId);
+            const cleanName = cleanUploadFileName(file.name);
+            const existing = siblings.find((item) => item.nome === cleanName);
+
+            let onConflict: "keep_both" | "reject" | "overwrite" = "reject";
+            let targetFileName: string | undefined;
+            let resolutionKind: "created" | "kept_both" | "overwritten" = "created";
+
+            if (existing) {
+              commitUploadState((prev) => ({
+                ...prev,
+                tasks: prev.tasks.map((t) =>
+                  t.id === nextTask.id ? { ...t, status: "conflict" } : t,
+                ),
+              }));
+
+              const existingNames = new Set(siblings.map((f) => f.nome));
+              const suggested = suggestFreeFileName(cleanName, existingNames);
+              const decision = await askConflictDecision(
+                existing,
+                file,
+                suggested,
+                existingNames,
+              );
+
+              if (abortController.signal.aborted || decision.action === "cancel") {
+                inMemoryFilesRef.current.delete(nextTask.id);
+                void deleteQueuedFileBlob(userId, nextTask.id);
+                commitUploadState((prev) => ({
+                  ...prev,
+                  tasks: prev.tasks.map((t) =>
+                    t.id === nextTask.id
+                      ? { ...t, status: "skipped", loadedBytes: 0 }
+                      : t,
+                  ),
+                }));
+                continue;
+              }
+
+              if (decision.action === "overwrite") {
+                onConflict = "overwrite";
+                targetFileName = cleanName;
+                resolutionKind = "overwritten";
+              } else {
+                onConflict = "keep_both";
+                targetFileName = decision.newName;
+                resolutionKind = "kept_both";
+              }
+            }
+
+            commitUploadState((prev) => ({
+              ...prev,
+              tasks: prev.tasks.map((t) =>
+                t.id === nextTask.id
+                  ? { ...t, status: "uploading", loadedBytes: 0 }
+                  : t,
+              ),
+            }));
+
+            let lastProgressUiAt = 0;
+            const onProgress = (loaded: number) => {
+              const now = performance.now();
+              if (loaded < file.size && now - lastProgressUiAt < 60) {
+                return;
+              }
+              lastProgressUiAt = now;
+              const nextState: PersistedUploadState = {
+                ...uploadStateRef.current,
+                tasks: uploadStateRef.current.tasks.map((t) =>
+                  t.id === nextTask.id ? { ...t, loadedBytes: loaded } : t,
+                ),
+              };
+              uploadStateRef.current = nextState;
+              setUploadState(nextState);
+            };
+
+            let savedFile: DriveFile;
+            try {
+              savedFile = await uploadFile(file, destFolderId, {
+                onConflict,
+                fileName: targetFileName,
+                onProgress,
+                signal: abortController.signal,
+              });
+            } catch (uploadErr) {
+              // Caso tenha surgido conflito simultâneo no servidor, pergunta ao usuário
+              if (
+                uploadErr instanceof ApiError &&
+                uploadErr.status === 409 &&
+                onConflict === "reject"
+              ) {
+                const key = destFolderId === null ? "root" : String(destFolderId);
+                const freshSiblings = await listFiles(destFolderId);
+                filesByFolderCache.set(key, freshSiblings);
+                const freshExisting = freshSiblings.find(
+                  (item) => item.nome === cleanName,
+                );
+                if (freshExisting) {
+                  commitUploadState((prev) => ({
+                    ...prev,
+                    tasks: prev.tasks.map((t) =>
+                      t.id === nextTask.id
+                        ? { ...t, status: "conflict", loadedBytes: 0 }
+                        : t,
+                    ),
+                  }));
+                  const existingNames = new Set(freshSiblings.map((f) => f.nome));
+                  const suggested = suggestFreeFileName(cleanName, existingNames);
+                  const decision = await askConflictDecision(
+                    freshExisting,
+                    file,
+                    suggested,
+                    existingNames,
+                  );
+                  if (abortController.signal.aborted || decision.action === "cancel") {
+                    inMemoryFilesRef.current.delete(nextTask.id);
+                    void deleteQueuedFileBlob(userId, nextTask.id);
+                    commitUploadState((prev) => ({
+                      ...prev,
+                      tasks: prev.tasks.map((t) =>
+                        t.id === nextTask.id
+                          ? { ...t, status: "skipped", loadedBytes: 0 }
+                          : t,
+                      ),
+                    }));
+                    continue;
+                  }
+                  commitUploadState((prev) => ({
+                    ...prev,
+                    tasks: prev.tasks.map((t) =>
+                      t.id === nextTask.id
+                        ? { ...t, status: "uploading", loadedBytes: 0 }
+                        : t,
+                    ),
+                  }));
+                  if (decision.action === "overwrite") {
+                    resolutionKind = "overwritten";
+                    savedFile = await uploadFile(file, destFolderId, {
+                      onConflict: "overwrite",
+                      fileName: cleanName,
+                      onProgress,
+                      signal: abortController.signal,
+                    });
+                  } else {
+                    resolutionKind = "kept_both";
+                    savedFile = await uploadFile(file, destFolderId, {
+                      onConflict: "keep_both",
+                      fileName: decision.newName,
+                      onProgress,
+                      signal: abortController.signal,
+                    });
+                  }
+                } else {
+                  resolutionKind = "kept_both";
+                  savedFile = await uploadFile(file, destFolderId, {
+                    onConflict: "keep_both",
+                    onProgress,
+                    signal: abortController.signal,
+                  });
+                }
+              } else {
+                throw uploadErr;
+              }
+            }
+
+            if (resolutionKind === "overwritten") {
+              bumpFileVersion(savedFile.id);
+              const idx = siblings.findIndex((f) => f.id === savedFile.id);
+              if (idx >= 0) {
+                siblings[idx] = savedFile;
+              } else {
+                siblings.push(savedFile);
+              }
+            } else {
+              siblings.push(savedFile);
+            }
+
+            inMemoryFilesRef.current.delete(nextTask.id);
+            void deleteQueuedFileBlob(userId, nextTask.id);
+
+            commitUploadState((prev) => ({
+              ...prev,
+              totalUploadedCount: prev.totalUploadedCount + 1,
+              tasks: prev.tasks.map((t) =>
+                t.id === nextTask.id
+                  ? {
+                      ...t,
+                      status: "done",
+                      finalName: savedFile.nome,
+                      loadedBytes: file.size,
+                      resolution: resolutionKind,
+                    }
+                  : t,
+              ),
+            }));
+
+            if (!inTrashRef.current && destFolderId === folderIdRef.current) {
+              void refreshRef.current();
+            } else {
+              void refreshStorage();
+            }
+          } catch (err) {
+            if (abortController.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+              break;
+            }
+            const msg = err instanceof ApiError ? err.message : "Falha no envio.";
+            inMemoryFilesRef.current.delete(nextTask.id);
+            void deleteQueuedFileBlob(userId, nextTask.id);
+            commitUploadState((prev) => ({
+              ...prev,
+              tasks: prev.tasks.map((t) =>
+                t.id === nextTask.id
+                  ? { ...t, status: "error", errorMessage: msg }
+                  : t,
+              ),
+            }));
+            setError(msg);
+          }
+        }
+      } finally {
+        workerRunningRef.current = false;
+        batchAbortRef.current = null;
+        setUploadingActive(false);
+        void refreshRef.current();
+      }
+    },
+    [askConflictDecision, bumpFileVersion, commitUploadState, refreshStorage],
+  );
+
+  // Restaura contagem de itens upados (e retoma envios pendentes salvos em IndexedDB) ao carregar/voltar à página
+  useEffect(() => {
+    if (!user) {
+      bootedUserIdRef.current = null;
+      return;
+    }
+    if (bootedUserIdRef.current === user.id) {
+      return;
+    }
+    bootedUserIdRef.current = user.id;
+
+    const restored = loadUploadState(user.id);
+    let hasPendingToResume = false;
+    const normalizedTasks: UploadTaskRecord[] = restored.tasks.map((t) => {
+      if (t.status === "uploading" || t.status === "conflict" || t.status === "queued") {
+        hasPendingToResume = true;
+        return { ...t, status: "queued", loadedBytes: 0 };
+      }
+      return t;
+    });
+
+    const initial: PersistedUploadState = {
+      ...restored,
+      tasks: normalizedTasks,
+    };
+    uploadStateRef.current = initial;
+    setUploadState(initial);
+    saveUploadState(user.id, initial);
+
+    if (hasPendingToResume) {
+      void runUploadWorker(user.id);
+    }
+  }, [user, runUploadWorker]);
+
+  useEffect(() => {
+    if (!uploadingActive) {
+      return;
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      if (user) {
+        saveUploadState(user.id, uploadStateRef.current);
+      }
+      event.preventDefault();
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [uploadingActive, user]);
 
   useEffect(() => {
     const trimmed = searchQuery.trim();
@@ -201,10 +703,23 @@ export function DrivePage() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) {
+      if (
+        previewId !== null ||
+        moving !== null ||
+        naming ||
+        renaming !== null ||
+        conflictPrompt !== null ||
+        confirmEmptyTrash
+      ) {
         return;
       }
-      if (previewId !== null || moving !== null || naming || renaming !== null) {
+      if (event.key === "Escape" && selectedFileIds.size > 0) {
+        event.preventDefault();
+        setSelectedFileIds(new Set());
+        setLastSelectedFileId(null);
+        return;
+      }
+      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) {
         return;
       }
       const el = document.activeElement;
@@ -221,7 +736,15 @@ export function DrivePage() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [previewId, moving, naming, renaming]);
+  }, [
+    previewId,
+    moving,
+    naming,
+    renaming,
+    conflictPrompt,
+    confirmEmptyTrash,
+    selectedFileIds.size,
+  ]);
 
   useEffect(() => {
     const cache = blobCache.current;
@@ -231,14 +754,13 @@ export function DrivePage() {
     };
   }, []);
 
-  const needBlob = useCallback(async (id: number) => {
-    const url = await loadBlobUrl(blobCache.current, id);
-    setThumbs((prev) => (prev[id] === url ? prev : { ...prev, [id]: url }));
-    return url;
-  }, []);
-
   if (ready && !user) {
     return <Navigate to="/login" replace />;
+  }
+
+  function clearSelection() {
+    setSelectedFileIds(new Set());
+    setLastSelectedFileId(null);
   }
 
   function clearSearchText() {
@@ -255,30 +777,93 @@ export function DrivePage() {
   }
 
   async function sendItems(items: UploadItem[]) {
-    if (items.length === 0) {
+    if (!user || items.length === 0) {
       return;
     }
     setError(null);
-    const cache = new Map<string, DriveFolder[]>();
-    const total = items.length;
-    setBusy(`Enviando 0/${total}…`);
-    try {
-      let done = 0;
-      for (const item of items) {
-        const dest = await ensureFolderPath(folderId, item.dirs, cache);
-        if (item.file) {
-          await uploadFile(item.file, dest);
-        }
-        done += 1;
-        setBusy(`Enviando ${done}/${total}…`);
+    setNotice(null);
+
+    const targetRoot = folderId;
+    const newRecords: UploadTaskRecord[] = [];
+
+    for (const item of items) {
+      const id = makeTaskId();
+      if (item.file) {
+        inMemoryFilesRef.current.set(id, item.file);
+        void putQueuedFileBlob(user.id, id, item.file);
+        newRecords.push({
+          id,
+          name: cleanUploadFileName(item.file.name),
+          size: item.file.size,
+          loadedBytes: 0,
+          dirs: item.dirs,
+          rootFolderId: targetRoot,
+          status: "queued",
+        });
+      } else {
+        newRecords.push({
+          id,
+          name: item.dirs.at(-1) ?? "Pasta",
+          size: 0,
+          loadedBytes: 0,
+          dirs: item.dirs,
+          rootFolderId: targetRoot,
+          isFolderPlaceholder: true,
+          status: "queued",
+        });
       }
-      await refresh();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Falha no envio.");
-      await refresh();
-    } finally {
-      setBusy(null);
     }
+
+    commitUploadState((prev) => ({
+      ...prev,
+      minimized: false,
+      tasks: [...prev.tasks, ...newRecords],
+    }));
+
+    void runUploadWorker(user.id);
+  }
+
+  function cancelActiveUploads() {
+    if (!user) {
+      return;
+    }
+    conflictResolverRef.current?.({ action: "cancel" });
+    batchAbortRef.current?.abort();
+
+    for (const task of uploadStateRef.current.tasks) {
+      if (
+        task.status === "queued" ||
+        task.status === "uploading" ||
+        task.status === "conflict"
+      ) {
+        inMemoryFilesRef.current.delete(task.id);
+        void deleteQueuedFileBlob(user.id, task.id);
+      }
+    }
+
+    commitUploadState((prev) => ({
+      ...prev,
+      tasks: prev.tasks.map((t) =>
+        t.status === "queued" || t.status === "uploading" || t.status === "conflict"
+          ? { ...t, status: "skipped", loadedBytes: 0 }
+          : t,
+      ),
+    }));
+  }
+
+  function clearUploadHistory() {
+    if (!user || uploadingActive) {
+      return;
+    }
+    inMemoryFilesRef.current.clear();
+    clearUploadState(user.id);
+    const fresh = emptyUploadState();
+    uploadStateRef.current = fresh;
+    setUploadState(fresh);
+  }
+
+  function toggleMinimizeUploadPanel() {
+    commitUploadState((prev) => ({ ...prev, minimized: !prev.minimized }));
   }
 
   function onDragOver(event: DragEvent<HTMLElement>) {
@@ -320,6 +905,8 @@ export function DrivePage() {
 
   function goTo(id: number | null) {
     clearSearchText();
+    clearSelection();
+    setNotice(null);
     if (searchScope === "global" || typeFilter === "folder") {
       setTypeFilter("all");
     }
@@ -343,6 +930,8 @@ export function DrivePage() {
       return;
     }
     clearSearchText();
+    clearSelection();
+    setNotice(null);
     if (searchScope === "global" || typeFilter === "folder") {
       setTypeFilter("all");
     }
@@ -353,6 +942,8 @@ export function DrivePage() {
 
   function openContainingFolder(targetFolderId: number | null) {
     clearFilters();
+    clearSelection();
+    setNotice(null);
     setInTrash(false);
     setRenaming(null);
     setPreviewId(null);
@@ -366,6 +957,8 @@ export function DrivePage() {
 
   function openTrash() {
     clearFilters();
+    clearSelection();
+    setNotice(null);
     setFolders([]);
     setFiles([]);
     setInTrash(true);
@@ -412,14 +1005,47 @@ export function DrivePage() {
       return;
     }
     setError(null);
+    setNotice(null);
     try {
-      if (moving.kind === "folder") {
-        await moveFolder(moving.id, dest);
+      if (moving.mode === "single") {
+        if (moving.kind === "folder") {
+          await moveFolder(moving.id, dest);
+        } else {
+          await moveFile(moving.id, dest);
+          setSelectedFileIds((prev) => {
+            if (!prev.has(moving.id)) {
+              return prev;
+            }
+            const next = new Set(prev);
+            next.delete(moving.id);
+            return next;
+          });
+        }
+        setMoving(null);
+        await refresh();
       } else {
-        await moveFile(moving.id, dest);
+        const res = await batchMoveFiles(moving.ids, dest);
+        setMoving(null);
+        if (res.conflict_ids.length > 0) {
+          setSelectedFileIds(new Set(res.conflict_ids));
+          const names = res.conflict_names.slice(0, 3).join(", ");
+          const extra =
+            res.conflict_names.length > 3
+              ? ` e mais ${res.conflict_names.length - 3}`
+              : "";
+          setError(
+            `${res.moved_ids.length} movido(s). Conflito de nome no destino para: ${names}${extra}.`,
+          );
+        } else {
+          clearSelection();
+          setNotice(
+            res.moved_ids.length === 1
+              ? "1 arquivo movido."
+              : `${res.moved_ids.length} arquivos movidos.`,
+          );
+        }
+        await refresh();
       }
-      setMoving(null);
-      await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não foi possível mover.");
     }
@@ -432,6 +1058,14 @@ export function DrivePage() {
         await trashFolder(id);
       } else {
         await trashFile(id);
+        setSelectedFileIds((prev) => {
+          if (!prev.has(id)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       }
       await refresh();
     } catch (err) {
@@ -470,6 +1104,20 @@ export function DrivePage() {
     }
   }
 
+  async function onConfirmEmptyTrash() {
+    setError(null);
+    setEmptyingTrash(true);
+    try {
+      await emptyTrash();
+      setConfirmEmptyTrash(false);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Não foi possível limpar a lixeira.");
+    } finally {
+      setEmptyingTrash(false);
+    }
+  }
+
   if (!ready || !user) {
     return (
       <main className="drive-shell">
@@ -495,6 +1143,75 @@ export function DrivePage() {
   const visibleFiles = visibleListing.files;
   const empty = visibleFolders.length === 0 && visibleFiles.length === 0;
   const totalResults = visibleFolders.length + visibleFiles.length;
+  const trashTotalCount = folders.length + files.length;
+
+  function toggleFileSelection(fileId: number, shiftKey: boolean) {
+    setNotice(null);
+    setSelectedFileIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastSelectedFileId !== null && visibleFiles.length > 1) {
+        const idxA = visibleFiles.findIndex((f) => f.id === lastSelectedFileId);
+        const idxB = visibleFiles.findIndex((f) => f.id === fileId);
+        if (idxA >= 0 && idxB >= 0) {
+          const [from, to] = idxA < idxB ? [idxA, idxB] : [idxB, idxA];
+          const shouldSelect = !prev.has(fileId);
+          for (let i = from; i <= to; i += 1) {
+            if (shouldSelect) {
+              next.add(visibleFiles[i].id);
+            } else {
+              next.delete(visibleFiles[i].id);
+            }
+          }
+          return next;
+        }
+      }
+      if (next.has(fileId)) {
+        next.delete(fileId);
+      } else {
+        next.add(fileId);
+      }
+      return next;
+    });
+    setLastSelectedFileId(fileId);
+  }
+
+  const allVisibleFilesSelected =
+    visibleFiles.length > 0 && visibleFiles.every((f) => selectedFileIds.has(f.id));
+
+  function toggleSelectAllVisible() {
+    setNotice(null);
+    if (allVisibleFilesSelected) {
+      setSelectedFileIds((prev) => {
+        const next = new Set(prev);
+        for (const f of visibleFiles) {
+          next.delete(f.id);
+        }
+        return next;
+      });
+    } else {
+      setSelectedFileIds((prev) => {
+        const next = new Set(prev);
+        for (const f of visibleFiles) {
+          next.add(f.id);
+        }
+        return next;
+      });
+    }
+  }
+
+  function handleFileTileClick(event: MouseEvent, file: DriveFile) {
+    if (!inTrash && (selectedFileIds.size > 0 || event.shiftKey)) {
+      event.preventDefault();
+      toggleFileSelection(file.id, event.shiftKey);
+      return;
+    }
+    openPreview(file);
+  }
+
+  const storagePct =
+    storageStats && storageStats.total_bytes > 0
+      ? Math.min(100, Math.max(0, (storageStats.used_bytes / storageStats.total_bytes) * 100))
+      : 0;
 
   const title = inTrash
     ? "Lixeira"
@@ -522,24 +1239,60 @@ export function DrivePage() {
       onDrop={onDrop}
     >
       <header className="topbar">
-        <div>
+        <div className="topbar-main">
           <p className="eyebrow">Drive local</p>
           <h1>{title}</h1>
           {inTrash ? (
             <p className="hint">Itens somem após {ttlDays} dias.</p>
           ) : null}
         </div>
-        <div className="top-actions">
-          <button
-            type="button"
-            className={inTrash ? "ghost current-view" : "ghost"}
-            onClick={openTrash}
-          >
-            Lixeira
-          </button>
-          <button type="button" className="ghost" onClick={() => void logout()}>
-            Sair
-          </button>
+
+        <div className="topbar-right">
+          {storageStats ? (
+            <div
+              className="storage-meter"
+              title={`Uso de armazenamento da máquina: ${formatStoragePair(storageStats.used_bytes, storageStats.total_bytes)} (${Math.round(storagePct)}%)`}
+            >
+              <div className="storage-meter-top">
+                <span className="storage-label">
+                  <DiskMark />
+                  Disco
+                </span>
+                <strong className="storage-numbers">
+                  {formatStoragePair(storageStats.used_bytes, storageStats.total_bytes)}
+                </strong>
+              </div>
+              <div className="storage-track" aria-hidden="true">
+                <div
+                  className={storagePct >= 90 ? "storage-fill high" : "storage-fill"}
+                  style={{ width: `${storagePct}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="top-actions">
+            {inTrash ? (
+              <button
+                type="button"
+                className="danger"
+                disabled={trashTotalCount === 0 || emptyingTrash}
+                onClick={() => setConfirmEmptyTrash(true)}
+              >
+                Limpar lixeira
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={inTrash ? "ghost current-view" : "ghost"}
+              onClick={openTrash}
+            >
+              Lixeira
+            </button>
+            <button type="button" className="ghost" onClick={() => void logout()}>
+              Sair
+            </button>
+          </div>
         </div>
       </header>
 
@@ -578,18 +1331,21 @@ export function DrivePage() {
 
       {!inTrash ? (
         <section className={drag ? "dropzone drag" : "dropzone"}>
-          <p>{busy ?? "Solte arquivos ou pastas nesta pasta, ou"}</p>
+          <p>
+            {uploadingActive
+              ? "Envio em andamento — você pode adicionar mais itens à fila"
+              : "Solte arquivos ou pastas nesta pasta, ou"}
+          </p>
           <div className="drop-actions">
             <button type="button" className="ghost" onClick={() => setNaming(true)}>
               Nova pasta
             </button>
-            <button type="button" disabled={Boolean(busy)} onClick={() => inputRef.current?.click()}>
+            <button type="button" onClick={() => inputRef.current?.click()}>
               Enviar arquivos
             </button>
             <button
               type="button"
               className="ghost"
-              disabled={Boolean(busy)}
               onClick={() => folderInputRef.current?.click()}
             >
               Enviar pasta
@@ -625,6 +1381,14 @@ export function DrivePage() {
           />
         </section>
       ) : null}
+
+      <UploadPanel
+        state={uploadState}
+        active={uploadingActive}
+        onToggleMinimize={toggleMinimizeUploadPanel}
+        onCancelActive={cancelActiveUploads}
+        onClearHistory={clearUploadHistory}
+      />
 
       {naming && !inTrash ? (
         <form className="new-folder" onSubmit={(e) => void onCreateFolder(e)}>
@@ -761,22 +1525,71 @@ export function DrivePage() {
             })}
           </div>
 
-          {hasActiveFilter ? (
-            <div className="filter-status">
-              <span>
-                {isPendingGlobal
-                  ? "Buscando…"
-                  : `${totalResults} ${totalResults === 1 ? "item" : "itens"} ${scopeSummaryLabel}`}
-              </span>
-              <button type="button" className="filter-reset" onClick={clearFilters}>
-                Limpar
+          <div className="filter-right-tools">
+            {!inTrash && visibleFiles.length > 0 && selectedFileIds.size === 0 ? (
+              <button
+                type="button"
+                className="filter-reset"
+                onClick={toggleSelectAllVisible}
+              >
+                Selecionar arquivos
               </button>
-            </div>
-          ) : null}
+            ) : null}
+
+            {hasActiveFilter ? (
+              <div className="filter-status">
+                <span>
+                  {isPendingGlobal
+                    ? "Buscando…"
+                    : `${totalResults} ${totalResults === 1 ? "item" : "itens"} ${scopeSummaryLabel}`}
+                </span>
+                <button type="button" className="filter-reset" onClick={clearFilters}>
+                  Limpar
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </section>
 
+      {!inTrash && selectedFileIds.size > 0 ? (
+        <section className="selection-bar" aria-label="Ações de seleção em lote">
+          <div className="selection-info">
+            <strong>
+              {selectedFileIds.size}{" "}
+              {selectedFileIds.size === 1 ? "arquivo selecionado" : "arquivos selecionados"}
+            </strong>
+            {visibleFiles.length > 0 ? (
+              <button
+                type="button"
+                className="ghost selection-link"
+                onClick={toggleSelectAllVisible}
+              >
+                {allVisibleFilesSelected ? "Desmarcar visíveis" : "Selecionar todos"}
+              </button>
+            ) : null}
+          </div>
+          <div className="selection-actions">
+            <button
+              type="button"
+              onClick={() =>
+                setMoving({
+                  mode: "batch-files",
+                  ids: Array.from(selectedFileIds),
+                })
+              }
+            >
+              Mover selecionados
+            </button>
+            <button type="button" className="ghost" onClick={clearSelection}>
+              Cancelar
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {error ? <p className="error">{error}</p> : null}
+      {notice ? <p className="notice">{notice}</p> : null}
 
       {empty ? (
         isPendingGlobal ? (
@@ -851,7 +1664,12 @@ export function DrivePage() {
                           type="button"
                           className="ghost"
                           onClick={() =>
-                            setMoving({ kind: "folder", id: folder.id, nome: folder.nome })
+                            setMoving({
+                              mode: "single",
+                              kind: "folder",
+                              id: folder.id,
+                              nome: folder.nome,
+                            })
                           }
                         >
                           Mover
@@ -871,16 +1689,38 @@ export function DrivePage() {
             );
           })}
           {visibleFiles.map((file) => {
+            const isSelected = !inTrash && selectedFileIds.has(file.id);
             const fileSubtitle = inTrash
               ? `${formatBytes(file.tamanho_bytes)} · ${ttlLabel(file.expires_at)}`
               : file.location
                 ? `${formatBytes(file.tamanho_bytes)} · ${file.location}`
                 : formatBytes(file.tamanho_bytes);
+            const vTag = file.tamanho_bytes + (fileVersions[file.id] ?? 0);
             return (
               <li key={`f-${file.id}`}>
-                <div className="tile">
-                  <button type="button" className="tile-hit" onClick={() => openPreview(file)}>
-                    <MediaThumb file={file} blobUrl={thumbs[file.id]} onNeedBlob={needBlob} />
+                <div className={isSelected ? "tile selected" : "tile"}>
+                  {!inTrash ? (
+                    <button
+                      type="button"
+                      className={isSelected ? "tile-select-btn checked" : "tile-select-btn"}
+                      role="checkbox"
+                      aria-checked={isSelected}
+                      aria-label={`Selecionar ${file.nome}`}
+                      title="Selecionar para mover em lote (Shift+clique para intervalo)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFileSelection(file.id, e.shiftKey);
+                      }}
+                    >
+                      {isSelected ? "✓" : ""}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="tile-hit"
+                    onClick={(e) => handleFileTileClick(e, file)}
+                  >
+                    <MediaThumb file={file} version={vTag} />
                     <div className="tile-meta">
                       <strong title={file.nome}>{file.nome}</strong>
                       <span title={fileSubtitle}>{fileSubtitle}</span>
@@ -936,7 +1776,12 @@ export function DrivePage() {
                           type="button"
                           className="ghost"
                           onClick={() =>
-                            setMoving({ kind: "file", id: file.id, nome: file.nome })
+                            setMoving({
+                              mode: "single",
+                              kind: "file",
+                              id: file.id,
+                              nome: file.nome,
+                            })
                           }
                         >
                           Mover
@@ -960,7 +1805,7 @@ export function DrivePage() {
 
       {moving ? (
         <MovePicker
-          item={moving}
+          target={moving}
           startId={folderId}
           startCrumbs={crumbs}
           onCancel={() => setMoving(null)}
@@ -968,12 +1813,77 @@ export function DrivePage() {
         />
       ) : null}
 
+      {conflictPrompt ? (
+        <UploadConflictModal
+          existingFile={conflictPrompt.existingFile}
+          incomingFile={conflictPrompt.incomingFile}
+          suggestedName={conflictPrompt.suggestedName}
+          existingNames={conflictPrompt.existingNames}
+          fileVersion={
+            conflictPrompt.existingFile.tamanho_bytes +
+            (fileVersions[conflictPrompt.existingFile.id] ?? 0)
+          }
+          onResolve={conflictPrompt.resolve}
+        />
+      ) : null}
+
+      {confirmEmptyTrash ? (
+        <div
+          className="lightbox"
+          onClick={() => !emptyingTrash && setConfirmEmptyTrash(false)}
+          role="presentation"
+        >
+          <div
+            className="lightbox-card confirm-card"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="empty-trash-title"
+          >
+            <header>
+              <strong id="empty-trash-title">Limpar lixeira?</strong>
+              <button
+                type="button"
+                className="ghost"
+                disabled={emptyingTrash}
+                onClick={() => setConfirmEmptyTrash(false)}
+              >
+                Fechar
+              </button>
+            </header>
+            <p className="confirm-body">
+              Excluir permanentemente todos os {trashTotalCount}{" "}
+              {trashTotalCount === 1 ? "item" : "itens"} da lixeira? Essa operação libera espaço
+              no disco imediatamente e não pode ser desfeita.
+            </p>
+            <div className="drop-actions">
+              <button
+                type="button"
+                className="danger"
+                disabled={emptyingTrash}
+                onClick={() => void onConfirmEmptyTrash()}
+              >
+                {emptyingTrash ? "Limpando…" : "Excluir tudo de vez"}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={emptyingTrash}
+                onClick={() => setConfirmEmptyTrash(false)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {previewId !== null ? (
         <FileViewer
           files={visibleFiles}
           activeId={previewId}
           blobCache={blobCache.current}
-          onNeedBlob={needBlob}
+          fileVersions={fileVersions}
           onSelectId={setPreviewId}
           onDownload={(file) => void onDownload(file)}
           onClose={() => setPreviewId(null)}
@@ -984,13 +1894,13 @@ export function DrivePage() {
 }
 
 function MovePicker({
-  item,
+  target,
   startId,
   startCrumbs,
   onCancel,
   onConfirm,
 }: {
-  item: Moving;
+  target: MovingTarget;
   startId: number | null;
   startCrumbs: DriveFolder[];
   onCancel: () => void;
@@ -1007,7 +1917,16 @@ function MovePicker({
       try {
         const next = await listFolders(here);
         if (!cancelled) {
-          setFolders(next.filter((folder) => !(item.kind === "folder" && folder.id === item.id)));
+          setFolders(
+            next.filter(
+              (folder) =>
+                !(
+                  target.mode === "single" &&
+                  target.kind === "folder" &&
+                  folder.id === target.id
+                ),
+            ),
+          );
           setError(null);
         }
       } catch (err) {
@@ -1019,7 +1938,7 @@ function MovePicker({
     return () => {
       cancelled = true;
     };
-  }, [here, item]);
+  }, [here, target]);
 
   function go(id: number | null) {
     if (id === null) {
@@ -1034,17 +1953,33 @@ function MovePicker({
     setHere(id);
   }
 
+  const heading =
+    target.mode === "single"
+      ? `Mover “${target.nome}”`
+      : target.ids.length === 1
+        ? "Mover 1 arquivo selecionado"
+        : `Mover ${target.ids.length} arquivos selecionados`;
+
   return (
     <div className="lightbox" onClick={onCancel} role="presentation">
-      <div className="lightbox-card move-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div
+        className="lightbox-card move-card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
         <header>
-          <strong>Mover “{item.nome}”</strong>
+          <strong>{heading}</strong>
           <button type="button" className="ghost" onClick={onCancel}>
             Fechar
           </button>
         </header>
         <nav className="crumbs" aria-label="Destino">
-          <button type="button" className={here === null ? "crumb current" : "crumb"} onClick={() => go(null)}>
+          <button
+            type="button"
+            className={here === null ? "crumb current" : "crumb"}
+            onClick={() => go(null)}
+          >
             Início
           </button>
           {path.map((crumb) => (
@@ -1093,6 +2028,27 @@ function MovePicker({
         </div>
       </div>
     </div>
+  );
+}
+
+function DiskMark() {
+  return (
+    <svg viewBox="0 0 20 20" className="disk-icon" aria-hidden="true">
+      <rect
+        x="3"
+        y="2.5"
+        width="14"
+        height="15"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <circle cx="10" cy="8.5" r="3.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="10" cy="8.5" r="1" fill="currentColor" />
+      <line x1="3.8" y1="14" x2="16.2" y2="14" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="14" cy="15.8" r="0.9" fill="currentColor" />
+    </svg>
   );
 }
 

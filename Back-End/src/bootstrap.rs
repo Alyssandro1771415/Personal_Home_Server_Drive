@@ -134,6 +134,7 @@ pub async fn run() {
         .unwrap_or(30);
 
     let store = FsStore::new(storage_root.clone());
+    store.cleanup_temp_uploads().await;
     let trash_ttl = Duration::days(trash_days);
 
     let purge = PurgeExpired {

@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
 
+use crate::use_cases::empty_trash::EmptyTrash;
 use crate::use_cases::list_trash::ListTrash;
 use crate::use_cases::purge_expired::PurgeExpired;
 
@@ -20,7 +22,21 @@ struct TrashJson {
 }
 
 pub fn trash_routes() -> Router<AppState> {
-    Router::new().route("/trash", get(list_trash))
+    Router::new().route("/trash", get(list_trash).delete(empty_trash))
+}
+
+async fn empty_trash(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<StatusCode, StatusCode> {
+    let uc = EmptyTrash {
+        users: Arc::new(state.users.clone()),
+        files: Arc::new(state.files.clone()),
+        folders: Arc::new(state.folders.clone()),
+        store: Arc::new(state.store.clone()),
+    };
+    uc.execute(auth.id).await.map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_trash(

@@ -2,6 +2,7 @@
 //! Falam com o domínio e com as portas, nunca com Axum ou banco direto.
 pub mod create_folder;
 pub mod download_file;
+pub mod empty_trash;
 pub mod folder_path;
 pub mod list_files;
 pub mod list_folders;
@@ -17,3 +18,6 @@ pub mod search_drive;
 pub mod storage_paths;
 pub mod sync_disk;
 pub mod upload_file;
+
+#[cfg(test)]
+mod tests_suite;

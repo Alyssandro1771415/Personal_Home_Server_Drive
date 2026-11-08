@@ -162,6 +162,27 @@ impl FileRepoBd for PostgresFiles {
         Ok(())
     }
 
+    async fn overwrite_content(
+        &self,
+        id: FileId,
+        mime: Option<String>,
+        tamanho_bytes: i64,
+    ) -> Result<StoredFile, Erro> {
+        let row = sqlx::query_as::<_, FileRow>(&format!(
+            "UPDATE files
+             SET mime = $2, tamanho_bytes = $3, trashed_at = NULL
+             WHERE id = $1
+             RETURNING {FILE_COLS}"
+        ))
+        .bind(id.0 as i32)
+        .bind(&mime)
+        .bind(tamanho_bytes)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(from_row(row))
+    }
+
     async fn trash_in_folders(
         &self,
         owner: UserId,

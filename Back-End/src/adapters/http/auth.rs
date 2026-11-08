@@ -16,6 +16,25 @@ pub struct AuthUser {
     pub token: String,
 }
 
+pub fn authenticate_token(state: &AppState, raw_token: &str) -> Result<AuthUser, StatusCode> {
+    let token = raw_token.trim();
+    if token.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let session = state
+        .sessions
+        .lock()
+        .expect("sessions")
+        .get(token)
+        .cloned()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    Ok(AuthUser {
+        id: session.user_id,
+        token: token.to_string(),
+    })
+}
+
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = StatusCode;
 
@@ -32,21 +51,9 @@ impl FromRequestParts<AppState> for AuthUser {
         let token = header
             .strip_prefix("Bearer ")
             .filter(|t| !t.is_empty())
-            .ok_or(StatusCode::UNAUTHORIZED)?
-            .to_string();
-
-        let session = state
-            .sessions
-            .lock()
-            .expect("sessions")
-            .get(&token)
-            .cloned()
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
-        Ok(AuthUser {
-            id: session.user_id,
-            token,
-        })
+        authenticate_token(state, token)
     }
 }
 

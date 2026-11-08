@@ -10,6 +10,12 @@ use crate::use_cases::storage_paths::{
 
 const NOME_MAX: usize = 200;
 
+pub struct BatchMoveResult {
+    pub moved_ids: Vec<i64>,
+    pub conflict_ids: Vec<i64>,
+    pub conflict_names: Vec<String>,
+}
+
 pub struct MutateFile<U, R, D, S> {
     pub users: Arc<U>,
     pub files: Arc<R>,
@@ -78,6 +84,40 @@ impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> MutateFile<U, 
         self.files
             .update_entry(id, dest_raw, file.nome, new_key, None)
             .await
+    }
+
+    pub async fn batch_move_to(
+        &self,
+        owner: UserId,
+        ids: &[FileId],
+        folder_id: Option<FolderId>,
+    ) -> Result<BatchMoveResult, Erro> {
+        let root = user_root(&*self.users, owner).await?;
+        let _ = folder_rel_dir(&*self.folders, owner, &root, folder_id).await?;
+
+        let mut moved_ids = Vec::new();
+        let mut conflict_ids = Vec::new();
+        let mut conflict_names = Vec::new();
+
+        for &id in ids {
+            match self.move_to(owner, id, folder_id).await {
+                Ok(()) => moved_ids.push(id.0),
+                Err(Erro::Conflito) => {
+                    conflict_ids.push(id.0);
+                    if let Ok(Some(f)) = self.files.get(id).await {
+                        conflict_names.push(f.nome);
+                    }
+                }
+                Err(Erro::NaoEncontrado) => {}
+                Err(other) => return Err(other),
+            }
+        }
+
+        Ok(BatchMoveResult {
+            moved_ids,
+            conflict_ids,
+            conflict_names,
+        })
     }
 
     pub async fn trash(&self, owner: UserId, id: FileId) -> Result<(), Erro> {

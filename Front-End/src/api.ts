@@ -38,6 +38,20 @@ export type TrashListing = {
   ttl_days: number;
 };
 
+export type StorageStats = {
+  used_bytes: number;
+  total_bytes: number;
+  available_bytes: number;
+};
+
+export type UploadConflictStrategy = "keep_both" | "reject" | "overwrite";
+
+export type BatchMoveResult = {
+  moved_ids: number[];
+  conflict_ids: number[];
+  conflict_names: string[];
+};
+
 export class ApiError extends Error {
   status: number;
 
@@ -198,6 +212,8 @@ export async function createFolder(
 export type UploadFileOptions = {
   onProgress?: (loadedBytes: number, totalBytes: number) => void;
   signal?: AbortSignal;
+  onConflict?: UploadConflictStrategy;
+  fileName?: string;
 };
 
 export function uploadFile(
@@ -206,10 +222,16 @@ export function uploadFile(
   options?: UploadFileOptions,
 ): Promise<DriveFile> {
   const body = new FormData();
-  body.append("file", file);
   if (folderId !== null) {
     body.append("folder_id", String(folderId));
   }
+  if (options?.onConflict) {
+    body.append("on_conflict", options.onConflict);
+  }
+  if (options?.fileName) {
+    body.append("file_name", options.fileName);
+  }
+  body.append("file", file);
 
   return new Promise<DriveFile>((resolve, reject) => {
     if (options?.signal?.aborted) {
@@ -286,6 +308,25 @@ export function uploadFile(
   });
 }
 
+export function fileContentUrl(
+  id: number,
+  options?: { inline?: boolean; version?: string | number },
+): string {
+  const sp = new URLSearchParams();
+  if (options?.inline) {
+    sp.set("inline", "1");
+  }
+  const token = getToken();
+  if (token) {
+    sp.set("token", token);
+  }
+  if (options?.version !== undefined) {
+    sp.set("v", String(options.version));
+  }
+  const qs = sp.toString();
+  return apiUrl(`/files/${id}/content${qs ? `?${qs}` : ""}`);
+}
+
 export async function fetchFileBlob(id: number): Promise<Blob> {
   const res = await request(`/files/${id}/content`);
   if (!res.ok) {
@@ -295,13 +336,17 @@ export async function fetchFileBlob(id: number): Promise<Blob> {
 }
 
 export async function downloadFile(id: number, nome: string): Promise<void> {
-  const blob = await fetchFileBlob(id);
-  const url = URL.createObjectURL(blob);
+  const token = getToken();
+  if (!token) {
+    throw new ApiError(401, "Não autorizado.");
+  }
   const a = document.createElement("a");
-  a.href = url;
+  a.href = fileContentUrl(id, { inline: false });
   a.download = nome;
+  a.rel = "noopener";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
 }
 
 export async function renameFile(id: number, nome: string): Promise<void> {
@@ -320,6 +365,21 @@ export async function moveFile(id: number, folderId: number | null): Promise<voi
     body: JSON.stringify({ folder_id: folderId }),
   });
   await expectOk(res);
+}
+
+export async function batchMoveFiles(
+  fileIds: number[],
+  folderId: number | null,
+): Promise<BatchMoveResult> {
+  const res = await request("/files/batch-move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_ids: fileIds, folder_id: folderId }),
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return res.json() as Promise<BatchMoveResult>;
 }
 
 export async function trashFile(id: number): Promise<void> {
@@ -370,6 +430,18 @@ export async function listTrash(): Promise<TrashListing> {
     throw await parseError(res);
   }
   return res.json() as Promise<TrashListing>;
+}
+
+export async function emptyTrash(): Promise<void> {
+  await expectOk(await request("/trash", { method: "DELETE" }));
+}
+
+export async function getStorageStats(): Promise<StorageStats> {
+  const res = await request("/storage");
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return res.json() as Promise<StorageStats>;
 }
 
 export async function searchDrive(

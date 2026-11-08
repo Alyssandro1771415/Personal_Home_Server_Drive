@@ -42,6 +42,13 @@ pub trait FileRepoBd: Send + Sync {
         trashed_at: Option<DateTime<Utc>>,
     ) -> impl Future<Output = Result<(), Erro>> + Send;
 
+    fn overwrite_content(
+        &self,
+        id: FileId,
+        mime: Option<String>,
+        tamanho_bytes: i64,
+    ) -> impl Future<Output = Result<StoredFile, Erro>> + Send;
+
     fn trash_in_folders(
         &self,
         owner: UserId,

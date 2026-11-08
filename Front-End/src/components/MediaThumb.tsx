@@ -1,18 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchFileBlob, type DriveFile } from "../api";
+import { fetchFileBlob, fileContentUrl, type DriveFile } from "../api";
 import { canAutoThumb, fileKind } from "../media";
 
 type Props = {
   file: DriveFile;
   blobUrl?: string;
-  onNeedBlob: (id: number) => Promise<string>;
+  version?: number;
+  onNeedBlob?: (id: number) => Promise<string>;
 };
 
-export function MediaThumb({ file, blobUrl, onNeedBlob }: Props) {
+export function MediaThumb({ file, blobUrl, version }: Props) {
   const kind = fileKind(file);
   const hostRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  const cacheVersion = version ?? file.tamanho_bytes;
+
+  useEffect(() => {
+    setFailed(false);
+  }, [file.id, file.tamanho_bytes, version]);
 
   useEffect(() => {
     const el = hostRef.current;
@@ -25,33 +32,35 @@ export function MediaThumb({ file, blobUrl, onNeedBlob }: Props) {
           setVisible(true);
         }
       },
-      { rootMargin: "80px" },
+      { rootMargin: "120px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (!visible || blobUrl || !canAutoThumb(file) || failed) {
-      return;
-    }
-    let cancelled = false;
-    void onNeedBlob(file.id).catch(() => {
-      if (!cancelled) {
-        setFailed(true);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [visible, blobUrl, file, failed, onNeedBlob]);
+  const allowPreview = visible && !failed && canAutoThumb(file);
+  const mediaSrc = allowPreview
+    ? (blobUrl ?? fileContentUrl(file.id, { inline: true, version: cacheVersion }))
+    : null;
 
   return (
     <div ref={hostRef} className={`tile-thumb kind-${kind}`}>
-      {blobUrl && kind === "image" ? (
-        <img src={blobUrl} alt="" decoding="async" />
-      ) : blobUrl && kind === "video" ? (
-        <video src={`${blobUrl}#t=0.4`} muted playsInline preload="metadata" />
+      {mediaSrc && kind === "image" ? (
+        <img
+          src={mediaSrc}
+          alt=""
+          decoding="async"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      ) : mediaSrc && kind === "video" ? (
+        <video
+          src={`${mediaSrc}#t=0.4`}
+          muted
+          playsInline
+          preload="metadata"
+          onError={() => setFailed(true)}
+        />
       ) : (
         <KindMark kind={kind} ext={file.nome} />
       )}
@@ -60,7 +69,13 @@ export function MediaThumb({ file, blobUrl, onNeedBlob }: Props) {
   );
 }
 
-function KindMark({ kind, ext }: { kind: "image" | "video" | "other"; ext: string }) {
+export function KindMark({
+  kind,
+  ext,
+}: {
+  kind: "image" | "video" | "other";
+  ext: string;
+}) {
   const suffix = ext.includes(".") ? ext.slice(ext.lastIndexOf(".") + 1).toUpperCase() : "FILE";
   if (kind === "image") {
     return <span className="glyph">IMG</span>;

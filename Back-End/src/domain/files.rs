@@ -33,6 +33,34 @@ pub struct Folder {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskStats {
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadConflictMode {
+    KeepBoth,
+    Reject,
+    Overwrite,
+}
+
+impl UploadConflictMode {
+    pub fn parse(raw: Option<&str>) -> Result<Self, Erro> {
+        let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(Self::KeepBoth);
+        };
+        match s.to_ascii_lowercase().as_str() {
+            "keep_both" => Ok(Self::KeepBoth),
+            "reject" => Ok(Self::Reject),
+            "overwrite" => Ok(Self::Overwrite),
+            _ => Err(Erro::Validacao),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileCategory {
     Image,
     Video,
@@ -389,5 +417,26 @@ mod tests {
 
         let q_cedilla = normalize_search("cancao");
         assert!(matches_search("Canção Nova.mp3", &q_cedilla));
+    }
+
+    #[test]
+    fn parses_upload_conflict_modes() {
+        assert_eq!(
+            UploadConflictMode::parse(None).unwrap(),
+            UploadConflictMode::KeepBoth
+        );
+        assert_eq!(
+            UploadConflictMode::parse(Some("keep_both")).unwrap(),
+            UploadConflictMode::KeepBoth
+        );
+        assert_eq!(
+            UploadConflictMode::parse(Some("REJECT")).unwrap(),
+            UploadConflictMode::Reject
+        );
+        assert_eq!(
+            UploadConflictMode::parse(Some("overwrite")).unwrap(),
+            UploadConflictMode::Overwrite
+        );
+        assert!(UploadConflictMode::parse(Some("invalido")).is_err());
     }
 }
