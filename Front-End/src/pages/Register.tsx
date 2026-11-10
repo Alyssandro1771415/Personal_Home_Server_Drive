@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { ApiError } from "../api";
 import { useAuth } from "../auth";
+import { PasswordField } from "../components/PasswordField";
 
 export function RegisterPage() {
   const { user, ready, register } = useAuth();
@@ -46,10 +47,9 @@ export function RegisterPage() {
             maxLength={50}
           />
           <label htmlFor="password">Senha</label>
-          <input
+          <PasswordField
             id="password"
             name="password"
-            type="password"
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

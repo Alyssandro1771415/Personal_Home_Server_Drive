@@ -32,9 +32,11 @@ body,
 #root {
   min-height: 100%;
   margin: 0;
+  max-width: 100%;
 }
 
 body {
+  overflow-x: hidden;
   background:
     radial-gradient(900px 520px at 0% -10%, #15202c 0%, transparent 58%),
     var(--bg);
@@ -183,9 +185,46 @@ input::placeholder {
   font-size: 0.82rem;
 }
 
-.auth-card form button {
+.auth-card form button[type="submit"] {
   width: 100%;
   margin-top: 1.35rem;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  width: 100%;
+  padding-right: 2.75rem;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.28rem;
+  transform: translateY(-50%);
+  width: 2.15rem;
+  height: 2.15rem;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.password-toggle:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--text);
+}
+
+.password-toggle svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  display: block;
 }
 
 .foot {
@@ -319,6 +358,9 @@ input::placeholder {
   flex-direction: column;
   gap: 0.6rem;
   margin-bottom: 1.15rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .search-row {
@@ -463,6 +505,9 @@ input::placeholder {
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .type-chips {
@@ -470,6 +515,8 @@ input::placeholder {
   align-items: center;
   gap: 0.38rem;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .type-chip {
@@ -730,11 +777,20 @@ button.danger:hover:not(:disabled) {
 .lightbox {
   position: fixed;
   inset: 0;
+  width: 100%;
+  height: 100svh;
+  max-height: 100svh;
+  box-sizing: border-box;
   background: rgba(4, 5, 7, 0.82);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+  overflow: hidden;
   z-index: 20;
 }
 
@@ -760,14 +816,21 @@ button.danger:hover:not(:disabled) {
   font-weight: 500;
 }
 
+.lightbox:has(.viewer-card) {
+  flex-direction: column;
+  align-items: center;
+}
+
 .lightbox-card.viewer-card {
   width: min(100%, 960px);
-  max-height: calc(100vh - 3rem);
-  max-height: calc(100dvh - 3rem);
+  height: min(100%, 760px);
+  max-height: 100%;
+  margin-block: auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .lightbox-card .viewer-header {
@@ -816,16 +879,15 @@ button.danger:hover:not(:disabled) {
 .viewer-stage {
   position: relative;
   width: 100%;
-  height: min(74vh, calc(100vh - 8.5rem), 680px);
-  height: min(74dvh, calc(100dvh - 8.5rem), 680px);
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  height: auto;
   min-width: 0;
   min-height: 0;
   background: #050608;
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
-  touch-action: pan-y pinch-zoom;
+  touch-action: none;
   user-select: none;
 }
 
@@ -839,20 +901,25 @@ button.danger:hover:not(:disabled) {
   justify-content: center;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .viewer-card .viewer-media img,
 .viewer-card .viewer-media video {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: block;
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   min-width: 0;
   min-height: 0;
   object-fit: contain;
-  background: #050608;
-  border-radius: 0;
+  object-position: center;
+  background: transparent;
 }
 
 .viewer-nav {
@@ -1513,21 +1580,19 @@ button.danger:hover:not(:disabled) {
   }
 
   .type-chips {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 0.1rem;
-  }
-
-  .type-chips::-webkit-scrollbar {
-    display: none;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    max-width: 100%;
+    gap: 0.32rem;
   }
 
   .type-chip {
-    padding: 0.28rem 0.56rem;
-    font-size: 0.69rem;
-    flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
+    padding: 0.36rem 0.28rem;
+    font-size: 0.68rem;
+    text-align: center;
   }
 
   .filter-status {
@@ -1625,21 +1690,27 @@ button.danger:hover:not(:disabled) {
   }
 
   .lightbox {
-    padding: 0.5rem;
+    padding:
+      max(0.4rem, env(safe-area-inset-top))
+      max(0.4rem, env(safe-area-inset-right))
+      max(0.4rem, env(safe-area-inset-bottom))
+      max(0.4rem, env(safe-area-inset-left));
   }
 
   .lightbox-card {
     padding: 0.65rem;
+    max-height: 100%;
   }
 
   .lightbox-card.viewer-card {
-    max-height: calc(100vh - 1rem);
-    max-height: calc(100dvh - 1rem);
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
   }
 
   .lightbox-card .viewer-header {
-    gap: 0.5rem;
-    margin-bottom: 0.55rem;
+    gap: 0.45rem;
+    margin-bottom: 0.5rem;
   }
 
   .viewer-title strong {
@@ -1653,11 +1724,6 @@ button.danger:hover:not(:disabled) {
   .viewer-actions button {
     padding: 0.36rem 0.58rem;
     font-size: 0.75rem;
-  }
-
-  .viewer-stage {
-    height: min(72vh, calc(100vh - 6rem));
-    height: min(72dvh, calc(100dvh - 6rem));
   }
 
   .viewer-nav {
