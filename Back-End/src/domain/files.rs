@@ -23,6 +23,7 @@ pub struct StoredFile {
     pub trashed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub duracao_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug)]

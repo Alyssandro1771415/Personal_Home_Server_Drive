@@ -36,6 +36,7 @@ type FileRow = (
     Option<DateTime<Utc>>,
     DateTime<Utc>,
     DateTime<Utc>,
+    Option<i64>,
 );
 
 fn from_row(row: FileRow) -> StoredFile {
@@ -50,11 +51,12 @@ fn from_row(row: FileRow) -> StoredFile {
         trashed_at: row.7,
         created_at: row.8,
         updated_at: row.9,
+        duracao_ms: row.10,
     }
 }
 
 const FILE_COLS: &str =
-    "id, owner_id, folder_id, nome, mime, tamanho_bytes, storage_key, trashed_at, created_at, updated_at";
+    "id, owner_id, folder_id, nome, mime, tamanho_bytes, storage_key, trashed_at, created_at, updated_at, duracao_ms";
 
 impl FileRepoBd for PostgresFiles {
     async fn create(
@@ -314,6 +316,39 @@ impl FileRepoBd for PostgresFiles {
             .execute(&self.pool)
             .await
             .map_err(map_sqlx)?;
+        Ok(())
+    }
+
+    async fn set_timestamps(
+        &self,
+        id: FileId,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), Erro> {
+        sqlx::query(
+            "UPDATE files SET created_at = $2, updated_at = $3
+             WHERE id = $1
+               AND (created_at IS DISTINCT FROM $2 OR updated_at IS DISTINCT FROM $3)",
+        )
+        .bind(id.0 as i32)
+        .bind(created_at)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(())
+    }
+
+    async fn set_duration(&self, id: FileId, duracao_ms: Option<i64>) -> Result<(), Erro> {
+        sqlx::query(
+            "UPDATE files SET duracao_ms = $2
+             WHERE id = $1 AND duracao_ms IS DISTINCT FROM $2",
+        )
+        .bind(id.0 as i32)
+        .bind(duracao_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
         Ok(())
     }
 }

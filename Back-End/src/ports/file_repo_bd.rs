@@ -89,4 +89,17 @@ pub trait FileRepoBd: Send + Sync {
         &self,
         folder_ids: &[i32],
     ) -> impl Future<Output = Result<(), Erro>> + Send;
+
+    fn set_timestamps(
+        &self,
+        id: FileId,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> impl Future<Output = Result<(), Erro>> + Send;
+
+    fn set_duration(
+        &self,
+        id: FileId,
+        duracao_ms: Option<i64>,
+    ) -> impl Future<Output = Result<(), Erro>> + Send;
 }

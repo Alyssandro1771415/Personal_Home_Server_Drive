@@ -28,6 +28,8 @@ pub struct FileJson {
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duracao_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -57,6 +59,7 @@ pub fn file_json(file: StoredFile, ttl: Duration) -> FileJson {
         trashed_at: file.trashed_at,
         created_at: file.created_at,
         updated_at: file.updated_at,
+        duracao_ms: file.duracao_ms,
     }
 }
 

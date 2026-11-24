@@ -1,7 +1,7 @@
 import type { DriveFile, DriveFolder } from "./api";
 import { fileCategory, FILTER_OPTIONS, type FileCategory } from "./media";
 
-export type SortKey = "name" | "size" | "created" | "modified" | "type";
+export type SortKey = "name" | "size" | "created" | "modified" | "type" | "duration";
 export type SortDir = "asc" | "desc";
 
 export type SortPref = {
@@ -17,6 +17,7 @@ export const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "created", label: "Data de criação" },
   { value: "modified", label: "Data de modificação" },
   { value: "type", label: "Tipo" },
+  { value: "duration", label: "Duração" },
 ];
 
 const CATEGORY_LABEL = new Map<FileCategory, string>(
@@ -27,7 +28,9 @@ const CATEGORY_LABEL = new Map<FileCategory, string>(
 );
 
 export function defaultDir(key: SortKey): SortDir {
-  return key === "size" || key === "created" || key === "modified" ? "desc" : "asc";
+  return key === "size" || key === "created" || key === "modified" || key === "duration"
+    ? "desc"
+    : "asc";
 }
 
 export function loadSort(): SortPref {
@@ -62,6 +65,9 @@ export function sortDirectionLabel(key: SortKey, dir: SortDir): string {
   if (key === "created" || key === "modified") {
     return dir === "desc" ? "Mais recentes primeiro" : "Mais antigos primeiro";
   }
+  if (key === "duration") {
+    return dir === "desc" ? "Mais longos primeiro" : "Mais curtos primeiro";
+  }
   return dir === "asc" ? "A até Z" : "Z até A";
 }
 
@@ -80,6 +86,18 @@ export function formatSortDate(iso?: string): string | null {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+export function formatDuration(ms?: number | null): string | null {
+  if (ms == null || ms < 0) {
+    return null;
+  }
+  const total = Math.round(ms / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const clock = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return hours > 0 ? `${hours}:${clock}` : clock;
 }
 
 export function categoryLabel(file: DriveFile): string {
@@ -121,7 +139,7 @@ function finish(primary: number, nameA: string, nameB: string, idA: number, idB:
 export function sortFolders(folders: DriveFolder[], key: SortKey, dir: SortDir): DriveFolder[] {
   const copy = [...folders];
   copy.sort((a, b) => {
-    if (key === "size" || key === "type") {
+    if (key === "size" || key === "type" || key === "duration") {
       return finish(0, a.nome, b.nome, a.id, b.id, "asc");
     }
     const primary =
@@ -147,10 +165,26 @@ export function sortFiles(files: DriveFile[], key: SortKey, dir: SortDir): Drive
       primary = timeOf(a.created_at) - timeOf(b.created_at);
     } else if (key === "modified") {
       primary = timeOf(a.updated_at) - timeOf(b.updated_at);
-    } else {
+    } else if (key === "type") {
       primary = compareName(fileTypeKey(a), fileTypeKey(b));
+    } else if (key === "duration") {
+      return compareDuration(a, b, dir);
+    } else {
+      primary = compareName(a.nome, b.nome);
     }
     return finish(primary, a.nome, b.nome, a.id, b.id, dir);
   });
   return copy;
+}
+
+function compareDuration(a: DriveFile, b: DriveFile, dir: SortDir): number {
+  const aMissing = a.duracao_ms == null;
+  const bMissing = b.duracao_ms == null;
+  if (aMissing || bMissing) {
+    if (aMissing && bMissing) {
+      return finish(0, a.nome, b.nome, a.id, b.id, "asc");
+    }
+    return aMissing ? 1 : -1;
+  }
+  return finish((a.duracao_ms ?? 0) - (b.duracao_ms ?? 0), a.nome, b.nome, a.id, b.id, dir);
 }

@@ -31,5 +31,6 @@ CREATE TABLE IF NOT EXISTS files (
     storage_key TEXT NOT NULL UNIQUE,
     trashed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    duracao_ms BIGINT
 );

@@ -259,4 +259,24 @@ impl FolderRepoBd for PostgresFolders {
             .map_err(map_sqlx)?;
         Ok(())
     }
+
+    async fn set_timestamps(
+        &self,
+        id: FolderId,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), Erro> {
+        sqlx::query(
+            "UPDATE folders SET created_at = $2, updated_at = $3
+             WHERE id = $1
+               AND (created_at IS DISTINCT FROM $2 OR updated_at IS DISTINCT FROM $3)",
+        )
+        .bind(id.0 as i32)
+        .bind(created_at)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(())
+    }
 }

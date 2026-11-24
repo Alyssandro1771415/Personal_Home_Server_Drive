@@ -67,4 +67,11 @@ pub trait FolderRepoBd: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Folder>, Erro>> + Send;
 
     fn delete_ids(&self, ids: &[i32]) -> impl Future<Output = Result<(), Erro>> + Send;
+
+    fn set_timestamps(
+        &self,
+        id: FolderId,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> impl Future<Output = Result<(), Erro>> + Send;
 }

@@ -83,10 +83,32 @@ describe("ordenação do drive", () => {
     expect(sorted.map((item) => item.id)).toEqual([3, 2, 1]);
   });
 
+  it("ordena vídeos pela duração e deixa sem duração no fim", () => {
+    const sorted = sortFiles(
+      [
+        file({ id: 1, nome: "curto.mp4", duracao_ms: 1_000 }),
+        file({ id: 2, nome: "foto.jpg" }),
+        file({ id: 3, nome: "longo.mp4", duracao_ms: 9_000 }),
+      ],
+      "duration",
+      "desc",
+    );
+    expect(sorted.map((item) => item.id)).toEqual([3, 1, 2]);
+  });
+
   it("mantém pastas em ordem alfabética quando o critério é tamanho", () => {
     const sorted = sortFolders(
       [folder({ id: 2, nome: "zeta" }), folder({ id: 1, nome: "alfa" })],
       "size",
+      "desc",
+    );
+    expect(sorted.map((item) => item.nome)).toEqual(["alfa", "zeta"]);
+  });
+
+  it("mantém pastas em ordem alfabética quando o critério é duração", () => {
+    const sorted = sortFolders(
+      [folder({ id: 2, nome: "zeta" }), folder({ id: 1, nome: "alfa" })],
+      "duration",
       "desc",
     );
     expect(sorted.map((item) => item.nome)).toEqual(["alfa", "zeta"]);

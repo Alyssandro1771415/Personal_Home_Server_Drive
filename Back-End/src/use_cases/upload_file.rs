@@ -1,8 +1,10 @@
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::domain::{
-    guess_mime, validate_name, Erro, FolderId, StoredFile, UploadConflictMode, UserId,
+    classify_file, guess_mime, validate_name, video_duration_ms, Erro, FileCategory, FolderId,
+    StoredFile, UploadConflictMode, UserId,
 };
 use crate::ports::{FileRepoBd, FileStore, FolderRepoBd, UserRepoBd};
 use crate::use_cases::storage_paths::{folder_rel_dir, pick_free_name, user_root};
@@ -122,32 +124,36 @@ impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> UploadFile<U, 
                     }
                 }
 
+                let duracao = probe_duration(&clean_nome, resolved_mime.as_deref(), &payload);
                 payload.persist(&*self.store, &initial_rel).await?;
 
-                if let Some(ex) = existing {
+                let saved = if let Some(ex) = existing {
                     self.repo
-                        .overwrite_content(ex.id, resolved_mime, size)
-                        .await
+                        .overwrite_content(ex.id, resolved_mime.clone(), size)
+                        .await?
                 } else {
                     match self
                         .repo
                         .create(
                             owner,
                             folder_id.map(|id| id.0),
-                            clean_nome,
-                            resolved_mime,
+                            clean_nome.clone(),
+                            resolved_mime.clone(),
                             size,
                             initial_rel.clone(),
                         )
                         .await
                     {
-                        Ok(file) => Ok(file),
+                        Ok(file) => file,
                         Err(err) => {
                             let _ = self.store.remove_file(&initial_rel).await;
-                            Err(err)
+                            return Err(err);
                         }
                     }
-                }
+                };
+                Ok(self
+                    .record_duration(&clean_nome, resolved_mime.as_deref(), saved, duracao)
+                    .await)
             }
             UploadConflictMode::Reject => {
                 let initial_rel = format!("{parent_dir}/{clean_nome}");
@@ -163,6 +169,7 @@ impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> UploadFile<U, 
                     }
                 }
 
+                let duracao = probe_duration(&clean_nome, resolved_mime.as_deref(), &payload);
                 payload.persist(&*self.store, &initial_rel).await?;
 
                 match self
@@ -170,14 +177,16 @@ impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> UploadFile<U, 
                     .create(
                         owner,
                         folder_id.map(|id| id.0),
-                        clean_nome,
-                        resolved_mime,
+                        clean_nome.clone(),
+                        resolved_mime.clone(),
                         size,
                         initial_rel.clone(),
                     )
                     .await
                 {
-                    Ok(file) => Ok(file),
+                    Ok(file) => Ok(self
+                        .record_duration(&clean_nome, resolved_mime.as_deref(), file, duracao)
+                        .await),
                     Err(err) => {
                         let _ = self.store.remove_file(&initial_rel).await;
                         Err(err)
@@ -194,6 +203,7 @@ impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> UploadFile<U, 
                         }
                     };
 
+                let duracao = probe_duration(&final_nome, resolved_mime.as_deref(), &payload);
                 payload.persist(&*self.store, &storage_key).await?;
 
                 match self
@@ -201,20 +211,56 @@ impl<U: UserRepoBd, R: FileRepoBd, D: FolderRepoBd, S: FileStore> UploadFile<U, 
                     .create(
                         owner,
                         folder_id.map(|id| id.0),
-                        final_nome,
-                        resolved_mime,
+                        final_nome.clone(),
+                        resolved_mime.clone(),
                         size,
                         storage_key.clone(),
                     )
                     .await
                 {
-                    Ok(file) => Ok(file),
+                    Ok(file) => Ok(self
+                        .record_duration(&final_nome, resolved_mime.as_deref(), file, duracao)
+                        .await),
                     Err(err) => {
                         let _ = self.store.remove_file(&storage_key).await;
                         Err(err)
                     }
                 }
             }
+        }
+    }
+
+    async fn record_duration(
+        &self,
+        nome: &str,
+        mime: Option<&str>,
+        mut file: StoredFile,
+        probed: Option<i64>,
+    ) -> StoredFile {
+        let is_video = classify_file(nome, mime) == FileCategory::Video;
+        if !is_video && file.duracao_ms.is_none() {
+            return file;
+        }
+        let value = if is_video { probed } else { None };
+        if file.duracao_ms == value {
+            return file;
+        }
+        if self.repo.set_duration(file.id, value).await.is_ok() {
+            file.duracao_ms = value;
+        }
+        file
+    }
+}
+
+fn probe_duration(nome: &str, mime: Option<&str>, payload: &UploadPayload) -> Option<i64> {
+    if classify_file(nome, mime) != FileCategory::Video {
+        return None;
+    }
+    match payload {
+        UploadPayload::Bytes(bytes) => video_duration_ms(nome, &mut Cursor::new(bytes.as_slice())),
+        UploadPayload::TempFile { path, .. } => {
+            let mut file = std::fs::File::open(path).ok()?;
+            video_duration_ms(nome, &mut file)
         }
     }
 }

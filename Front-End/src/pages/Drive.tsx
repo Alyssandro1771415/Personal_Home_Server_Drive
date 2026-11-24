@@ -70,6 +70,7 @@ import {
 import {
   categoryLabel,
   defaultDir,
+  formatDuration,
   formatSortDate,
   loadSort,
   saveSort,
@@ -1752,7 +1753,9 @@ export function DrivePage() {
                   ? formatSortDate(file.updated_at)
                   : sort.key === "type"
                     ? categoryLabel(file)
-                    : null;
+                    : sort.key === "duration"
+                      ? formatDuration(file.duracao_ms) ?? "Sem duração"
+                      : null;
             const fileSubtitle = [
               formatBytes(file.tamanho_bytes),
               inTrash ? ttlLabel(file.expires_at) : file.location,

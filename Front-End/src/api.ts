@@ -18,6 +18,7 @@ export type DriveFile = {
   expires_at?: string;
   created_at?: string;
   updated_at?: string;
+  duracao_ms?: number | null;
 };
 
 export type DriveFolder = {

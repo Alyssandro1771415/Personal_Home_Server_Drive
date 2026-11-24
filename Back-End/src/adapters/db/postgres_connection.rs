@@ -61,10 +61,12 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
             storage_key TEXT NOT NULL UNIQUE,
             trashed_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            duracao_ms BIGINT
         )",
         "ALTER TABLE files ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()",
         "ALTER TABLE files ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS duracao_ms BIGINT",
     ];
 
     for sql in statements {

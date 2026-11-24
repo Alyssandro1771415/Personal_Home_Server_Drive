@@ -224,6 +224,22 @@ impl FolderRepoBd for MemFolders {
             .retain(|f| !ids.contains(&(f.id.0 as i32)));
         Ok(())
     }
+
+    async fn set_timestamps(
+        &self,
+        id: FolderId,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), Erro> {
+        for folder in self.rows.lock().unwrap().iter_mut() {
+            if folder.id == id {
+                folder.created_at = created_at;
+                folder.updated_at = updated_at;
+                return Ok(());
+            }
+        }
+        Err(Erro::NaoEncontrado)
+    }
 }
 
 #[derive(Default)]
@@ -260,6 +276,7 @@ impl FileRepoBd for MemFiles {
             trashed_at: None,
             created_at: now,
             updated_at: now,
+            duracao_ms: None,
         };
         rows.push(file.clone());
         Ok(file)
@@ -453,6 +470,32 @@ impl FileRepoBd for MemFiles {
                 .unwrap_or(false)
         });
         Ok(())
+    }
+
+    async fn set_timestamps(
+        &self,
+        id: FileId,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), Erro> {
+        for file in self.rows.lock().unwrap().iter_mut() {
+            if file.id == id {
+                file.created_at = created_at;
+                file.updated_at = updated_at;
+                return Ok(());
+            }
+        }
+        Err(Erro::NaoEncontrado)
+    }
+
+    async fn set_duration(&self, id: FileId, duracao_ms: Option<i64>) -> Result<(), Erro> {
+        for file in self.rows.lock().unwrap().iter_mut() {
+            if file.id == id {
+                file.duracao_ms = duracao_ms;
+                return Ok(());
+            }
+        }
+        Err(Erro::NaoEncontrado)
     }
 }
 

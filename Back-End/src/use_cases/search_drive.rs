@@ -215,6 +215,7 @@ mod tests {
             trashed_at: None,
             created_at: stamp,
             updated_at: stamp,
+            duracao_ms: None,
         }
     }
 
