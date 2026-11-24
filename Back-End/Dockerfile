@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM rust:1-bookworm AS builder
 
 RUN apt-get update \
@@ -6,19 +8,25 @@ RUN apt-get update \
 
 WORKDIR /usr/src/app
 
-# Cache de dependências
+ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
+
+# Dependências ficam nesta camada. O registro do Cargo fica em cache do BuildKit
+# para um rebuild no servidor não baixar os crates de novo.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    mkdir -p src \
     && echo "pub fn dummy() {}" > src/lib.rs \
     && echo "fn main() {}" > src/main.rs \
     && cargo build --release --locked \
-    && rm -rf src target/release/.fingerprint/drive-* target/release/deps/drive* target/release/deps/libdrive*
+    && rm -rf src target/release/.fingerprint/drive-* target/release/deps/*drive-*
 
-# Compilação real da aplicação.
-# O cache acima deixa target/release/drive como um main vazio. Os arquivos
-# copiados podem ter mtime anterior a esse binário, e o Cargo então não recompila.
+# O passo acima deixa um main vazio. Arquivos copiados podem ter mtime anterior
+# a esse binário; o touch força o Cargo a compilar o servidor de verdade.
 COPY src ./src
-RUN find src -type f -exec touch {} + \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    find src -type f -exec touch {} + \
     && cargo build --release --locked \
     && grep -a -q "Servidor inicializado" target/release/drive
 

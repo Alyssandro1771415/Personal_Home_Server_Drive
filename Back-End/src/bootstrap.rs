@@ -116,16 +116,24 @@ pub async fn run() {
         }
     }
 
-    if let Ok(stats) = sync_all_users(&storage_root, &users, &folders, &files).await {
-        if stats.folders_imported > 0 || stats.files_imported > 0 {
-            println!(
-                "Sincronização inicial: {} pasta(s) e {} arquivo(s) importado(s) de {}",
-                stats.folders_imported,
-                stats.files_imported,
-                storage_root.display()
-            );
+    let sync_users = users.clone();
+    let sync_folders = folders.clone();
+    let sync_files = files.clone();
+    let sync_root = storage_root.clone();
+    tokio::spawn(async move {
+        match sync_all_users(&sync_root, &sync_users, &sync_folders, &sync_files).await {
+            Ok(stats) if stats.folders_imported > 0 || stats.files_imported > 0 => {
+                println!(
+                    "Sincronização inicial: {} pasta(s) e {} arquivo(s) importado(s) de {}",
+                    stats.folders_imported,
+                    stats.files_imported,
+                    sync_root.display()
+                );
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("Erro na sincronização inicial do disco: {e:?}"),
         }
-    }
+    });
 
     let trash_days: i64 = env::var("TRASH_TTL_DAYS")
         .ok()
@@ -174,7 +182,5 @@ pub async fn run() {
         storage_root.display()
     );
 
-    axum::serve(listener, app)
-        .await
-        .expect("Falha no servidor");
+    axum::serve(listener, app).await.expect("Falha no servidor");
 }

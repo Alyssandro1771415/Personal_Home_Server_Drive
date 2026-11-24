@@ -50,6 +50,56 @@ jobs:
         working-directory: Back-End
         run: cargo test --locked
 
+  ci-integration:
+    name: CI · API com Postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ci-integration-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: suasenha
+          POSTGRES_DB: personal_drive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d personal_drive"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências nativas (OpenSSL / pkg-config)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Configurar toolchain Rust estável
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de dependências Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "Back-End -> target"
+          shared-key: integration
+
+      - name: Migrar banco legado e exercitar a API
+        working-directory: Back-End
+        env:
+          REQUIRE_DB: "1"
+          DATABASE_HOST: localhost
+          DATABASE_PORT: "5432"
+          DATABASE_NAME: personal_drive
+          DATABASE_USER: postgres
+          DATABASE_PASSWORD: suasenha
+        run: cargo test --locked --test api_smoke -- --ignored
+
   ci-frontend:
     name: CI · Frontend (React / TypeScript)
     runs-on: ubuntu-latest
@@ -72,6 +122,10 @@ jobs:
         working-directory: Front-End
         run: npm ci
 
+      - name: Testar ordenação da listagem
+        working-directory: Front-End
+        run: npm test
+
       - name: Validar tipagem e gerar bundle (npm run build)
         working-directory: Front-End
         run: npm run build
@@ -81,6 +135,7 @@ jobs:
     needs:
       - ci-backend
       - ci-frontend
+      - ci-integration
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main'

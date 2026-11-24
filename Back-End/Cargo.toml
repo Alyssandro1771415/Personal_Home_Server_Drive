@@ -16,3 +16,15 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-native-t
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs", "time", "io-util"] }
 tower-http = { version = "0.6", features = ["cors"] }
 uuid = { version = "1", features = ["v4"] }
+
+# O pacote do servidor continua em opt-level 3. As dependências ficam em
+# opt-level 1 para o build no servidor não reotimizar sqlx, tokio e argon2.
+[profile.release]
+lto = false
+codegen-units = 16
+
+[profile.release.package."*"]
+opt-level = 1
+
+[profile.release.package.drive]
+opt-level = 3
