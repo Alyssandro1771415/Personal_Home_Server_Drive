@@ -1256,6 +1256,52 @@ button.danger:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+.sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sort-control label {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.73rem;
+  letter-spacing: 0.02em;
+}
+
+.sort-control select,
+.sort-dir {
+  padding: 0.32rem 0.55rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.73rem;
+}
+
+.sort-control select {
+  max-width: 12.5rem;
+}
+
+.sort-dir {
+  min-width: 2rem;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.sort-control select:hover,
+.sort-dir:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--bg-3);
+}
+
+.sort-control select:focus-visible,
+.sort-dir:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
 .selection-bar {
   display: flex;
   align-items: center;

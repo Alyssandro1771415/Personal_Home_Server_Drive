@@ -16,6 +16,8 @@ export type DriveFile = {
   location?: string;
   trashed_at?: string;
   expires_at?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type DriveFolder = {
@@ -25,6 +27,8 @@ export type DriveFolder = {
   location?: string;
   trashed_at?: string;
   expires_at?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type SearchListing = {

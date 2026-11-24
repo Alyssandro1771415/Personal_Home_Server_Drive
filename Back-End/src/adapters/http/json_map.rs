@@ -26,6 +26,8 @@ pub struct FileJson {
     pub trashed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize)]
@@ -39,6 +41,8 @@ pub struct FolderJson {
     pub trashed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 pub fn file_json(file: StoredFile, ttl: Duration) -> FileJson {
@@ -51,6 +55,8 @@ pub fn file_json(file: StoredFile, ttl: Duration) -> FileJson {
         location: None,
         expires_at: file.trashed_at.map(|t| t + ttl),
         trashed_at: file.trashed_at,
+        created_at: file.created_at,
+        updated_at: file.updated_at,
     }
 }
 
@@ -68,6 +74,8 @@ pub fn folder_json(folder: Folder, ttl: Duration) -> FolderJson {
         location: None,
         expires_at: folder.trashed_at.map(|t| t + ttl),
         trashed_at: folder.trashed_at,
+        created_at: folder.created_at,
+        updated_at: folder.updated_at,
     }
 }
 

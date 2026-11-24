@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS folders (
     owner_id INTEGER NOT NULL REFERENCES users (id),
     parent_id INTEGER REFERENCES folders (id),
     nome TEXT NOT NULL,
-    trashed_at TIMESTAMPTZ
+    trashed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -27,5 +29,7 @@ CREATE TABLE IF NOT EXISTS files (
     mime TEXT,
     tamanho_bytes BIGINT NOT NULL,
     storage_key TEXT NOT NULL UNIQUE,
-    trashed_at TIMESTAMPTZ
+    trashed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

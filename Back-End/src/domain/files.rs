@@ -21,6 +21,8 @@ pub struct StoredFile {
     pub tamanho_bytes: i64,
     pub storage_key: String,
     pub trashed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +32,8 @@ pub struct Folder {
     pub parent_id: Option<FolderId>,
     pub nome: String,
     pub trashed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -34,6 +34,8 @@ type FileRow = (
     i64,
     String,
     Option<DateTime<Utc>>,
+    DateTime<Utc>,
+    DateTime<Utc>,
 );
 
 fn from_row(row: FileRow) -> StoredFile {
@@ -46,11 +48,13 @@ fn from_row(row: FileRow) -> StoredFile {
         tamanho_bytes: row.5,
         storage_key: row.6,
         trashed_at: row.7,
+        created_at: row.8,
+        updated_at: row.9,
     }
 }
 
 const FILE_COLS: &str =
-    "id, owner_id, folder_id, nome, mime, tamanho_bytes, storage_key, trashed_at";
+    "id, owner_id, folder_id, nome, mime, tamanho_bytes, storage_key, trashed_at, created_at, updated_at";
 
 impl FileRepoBd for PostgresFiles {
     async fn create(
@@ -148,7 +152,11 @@ impl FileRepoBd for PostgresFiles {
     ) -> Result<(), Erro> {
         sqlx::query(
             "UPDATE files
-             SET folder_id = $2, nome = $3, storage_key = $4, trashed_at = $5
+             SET folder_id = $2,
+                 nome = $3,
+                 storage_key = $4,
+                 trashed_at = $5,
+                 updated_at = CASE WHEN nome IS DISTINCT FROM $3 THEN now() ELSE updated_at END
              WHERE id = $1",
         )
         .bind(id.0 as i32)
@@ -170,7 +178,7 @@ impl FileRepoBd for PostgresFiles {
     ) -> Result<StoredFile, Erro> {
         let row = sqlx::query_as::<_, FileRow>(&format!(
             "UPDATE files
-             SET mime = $2, tamanho_bytes = $3, trashed_at = NULL
+             SET mime = $2, tamanho_bytes = $3, trashed_at = NULL, updated_at = now()
              WHERE id = $1
              RETURNING {FILE_COLS}"
         ))

@@ -187,18 +187,23 @@ impl<F: FileRepoBd, D: FolderRepoBd> SearchDrive<F, D> {
 mod tests {
     use super::*;
     use crate::domain::{FileCategory, FileId};
+    use chrono::Utc;
 
     fn sample_folder(id: i64, parent_id: Option<i64>, nome: &str) -> Folder {
+        let stamp = Utc::now();
         Folder {
             id: FolderId(id),
             owner_id: UserId(1),
             parent_id: parent_id.map(FolderId),
             nome: nome.to_string(),
             trashed_at: None,
+            created_at: stamp,
+            updated_at: stamp,
         }
     }
 
     fn sample_file(id: i64, folder_id: Option<i64>, nome: &str, mime: Option<&str>) -> StoredFile {
+        let stamp = Utc::now();
         StoredFile {
             id: FileId(id),
             owner_id: UserId(1),
@@ -208,6 +213,8 @@ mod tests {
             tamanho_bytes: 1024,
             storage_key: format!("u/{id}"),
             trashed_at: None,
+            created_at: stamp,
+            updated_at: stamp,
         }
     }
 

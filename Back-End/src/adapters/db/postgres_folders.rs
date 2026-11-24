@@ -20,7 +20,15 @@ fn map_sqlx(e: sqlx::Error) -> Erro {
     Erro::Interno
 }
 
-type FolderRow = (i32, i32, Option<i32>, String, Option<DateTime<Utc>>);
+type FolderRow = (
+    i32,
+    i32,
+    Option<i32>,
+    String,
+    Option<DateTime<Utc>>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
 
 fn from_row(row: FolderRow) -> Folder {
     Folder {
@@ -29,10 +37,12 @@ fn from_row(row: FolderRow) -> Folder {
         parent_id: row.2.map(|v| FolderId(v as i64)),
         nome: row.3,
         trashed_at: row.4,
+        created_at: row.5,
+        updated_at: row.6,
     }
 }
 
-const FOLDER_COLS: &str = "id, owner_id, parent_id, nome, trashed_at";
+const FOLDER_COLS: &str = "id, owner_id, parent_id, nome, trashed_at, created_at, updated_at";
 
 impl FolderRepoBd for PostgresFolders {
     async fn create(
@@ -89,22 +99,28 @@ impl FolderRepoBd for PostgresFolders {
     }
 
     async fn get(&self, id: FolderId) -> Result<Option<Folder>, Erro> {
-        let row =
-            sqlx::query_as::<_, FolderRow>(&format!("SELECT {FOLDER_COLS} FROM folders WHERE id = $1"))
-                .bind(id.0 as i32)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(map_sqlx)?;
+        let row = sqlx::query_as::<_, FolderRow>(&format!(
+            "SELECT {FOLDER_COLS} FROM folders WHERE id = $1"
+        ))
+        .bind(id.0 as i32)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
         Ok(row.map(from_row))
     }
 
     async fn rename(&self, id: FolderId, nome: String) -> Result<(), Erro> {
-        sqlx::query("UPDATE folders SET nome = $2 WHERE id = $1")
-            .bind(id.0 as i32)
-            .bind(&nome)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
+        sqlx::query(
+            "UPDATE folders
+             SET nome = $2,
+                 updated_at = CASE WHEN nome IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+             WHERE id = $1",
+        )
+        .bind(id.0 as i32)
+        .bind(&nome)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
         Ok(())
     }
 
@@ -142,7 +158,7 @@ impl FolderRepoBd for PostgresFolders {
             "WITH RECURSIVE tree AS (
                 SELECT {FOLDER_COLS} FROM folders WHERE id = $1 AND owner_id = $2
                 UNION ALL
-                SELECT f.id, f.owner_id, f.parent_id, f.nome, f.trashed_at
+                SELECT f.id, f.owner_id, f.parent_id, f.nome, f.trashed_at, f.created_at, f.updated_at
                 FROM folders f
                 JOIN tree t ON f.parent_id = t.id
                 WHERE f.owner_id = $2

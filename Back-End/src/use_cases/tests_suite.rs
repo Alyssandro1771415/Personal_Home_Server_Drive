@@ -77,12 +77,15 @@ impl FolderRepoBd for MemFolders {
     ) -> Result<Folder, Erro> {
         let mut nid = self.next_id.lock().unwrap();
         *nid += 1;
+        let now = Utc::now();
         let folder = Folder {
             id: FolderId(*nid),
             owner_id: owner,
             parent_id,
             nome,
             trashed_at: None,
+            created_at: now,
+            updated_at: now,
         };
         self.rows.lock().unwrap().push(folder.clone());
         Ok(folder)
@@ -123,6 +126,9 @@ impl FolderRepoBd for MemFolders {
     async fn rename(&self, id: FolderId, nome: String) -> Result<(), Erro> {
         for f in self.rows.lock().unwrap().iter_mut() {
             if f.id == id {
+                if f.nome != nome {
+                    f.updated_at = Utc::now();
+                }
                 f.nome = nome;
                 break;
             }
@@ -165,12 +171,7 @@ impl FolderRepoBd for MemFolders {
         Ok(out)
     }
 
-    async fn trash_ids(
-        &self,
-        owner: UserId,
-        ids: &[i32],
-        at: DateTime<Utc>,
-    ) -> Result<(), Erro> {
+    async fn trash_ids(&self, owner: UserId, ids: &[i32], at: DateTime<Utc>) -> Result<(), Erro> {
         for f in self.rows.lock().unwrap().iter_mut() {
             if f.owner_id == owner && ids.contains(&(f.id.0 as i32)) && f.trashed_at.is_none() {
                 f.trashed_at = Some(at);
@@ -186,7 +187,9 @@ impl FolderRepoBd for MemFolders {
         trashed_at: DateTime<Utc>,
     ) -> Result<(), Erro> {
         for f in self.rows.lock().unwrap().iter_mut() {
-            if f.owner_id == owner && ids.contains(&(f.id.0 as i32)) && f.trashed_at == Some(trashed_at)
+            if f.owner_id == owner
+                && ids.contains(&(f.id.0 as i32))
+                && f.trashed_at == Some(trashed_at)
             {
                 f.trashed_at = None;
             }
@@ -203,9 +206,7 @@ impl FolderRepoBd for MemFolders {
                     && f.trashed_at.is_some()
                     && match f.parent_id {
                         None => true,
-                        Some(pid) => !rows
-                            .iter()
-                            .any(|p| p.id == pid && p.trashed_at.is_some()),
+                        Some(pid) => !rows.iter().any(|p| p.id == pid && p.trashed_at.is_some()),
                     }
             })
             .cloned()
@@ -247,6 +248,7 @@ impl FileRepoBd for MemFiles {
         }
         let mut nid = self.next_id.lock().unwrap();
         *nid += 1;
+        let now = Utc::now();
         let file = StoredFile {
             id: FileId(*nid),
             owner_id: owner,
@@ -256,6 +258,8 @@ impl FileRepoBd for MemFiles {
             tamanho_bytes,
             storage_key,
             trashed_at: None,
+            created_at: now,
+            updated_at: now,
         };
         rows.push(file.clone());
         Ok(file)
@@ -317,6 +321,9 @@ impl FileRepoBd for MemFiles {
     ) -> Result<(), Erro> {
         for f in self.rows.lock().unwrap().iter_mut() {
             if f.id == id {
+                if f.nome != nome {
+                    f.updated_at = Utc::now();
+                }
                 f.folder_id = folder_id;
                 f.nome = nome;
                 f.storage_key = storage_key;
@@ -338,6 +345,7 @@ impl FileRepoBd for MemFiles {
                 f.mime = mime;
                 f.tamanho_bytes = tamanho_bytes;
                 f.trashed_at = None;
+                f.updated_at = Utc::now();
                 return Ok(f.clone());
             }
         }
@@ -521,7 +529,10 @@ async fn upload_conflict_modes_reject_keep_both_and_overwrite() {
         .await
         .unwrap();
     assert_eq!(overwritten.id, first.id);
-    assert_eq!(overwritten.tamanho_bytes, b"conteudo novo maior".len() as i64);
+    assert_eq!(
+        overwritten.tamanho_bytes,
+        b"conteudo novo maior".len() as i64
+    );
     assert_eq!(
         store.get("alyssandro/foto.jpg").await.unwrap(),
         b"conteudo novo maior"

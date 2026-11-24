@@ -68,6 +68,18 @@ import {
   type UploadTaskRecord,
 } from "../uploadPersistence";
 import {
+  categoryLabel,
+  defaultDir,
+  formatSortDate,
+  loadSort,
+  saveSort,
+  SORT_OPTIONS,
+  sortDirectionLabel,
+  sortFiles,
+  sortFolders,
+  type SortKey,
+} from "../sortListing";
+import {
   ensureFolderPath,
   itemsFromDataTransfer,
   itemsFromFileList,
@@ -175,6 +187,7 @@ export function DrivePage() {
   const [uploadingActive, setUploadingActive] = useState(false);
   const [conflictPrompt, setConflictPrompt] = useState<ConflictPromptState | null>(null);
 
+  const [sort, setSort] = useState(loadSort);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<EntryFilterKind>("all");
@@ -1139,8 +1152,13 @@ export function DrivePage() {
       ? filterLocal(folders, files, trimmedQuery, typeFilter)
       : { folders, files };
 
-  const visibleFolders = visibleListing.folders;
-  const visibleFiles = visibleListing.files;
+  const visibleFolders = sortFolders(visibleListing.folders, sort.key, sort.dir);
+  const visibleFiles = sortFiles(visibleListing.files, sort.key, sort.dir);
+
+  function applySort(next: { key: SortKey; dir: typeof sort.dir }) {
+    setSort(next);
+    saveSort(next);
+  }
   const empty = visibleFolders.length === 0 && visibleFiles.length === 0;
   const totalResults = visibleFolders.length + visibleFiles.length;
   const trashTotalCount = folders.length + files.length;
@@ -1526,6 +1544,37 @@ export function DrivePage() {
           </div>
 
           <div className="filter-right-tools">
+            <div className="sort-control">
+              <label htmlFor="drive-sort">Ordenar</label>
+              <select
+                id="drive-sort"
+                value={sort.key}
+                onChange={(e) => {
+                  const key = e.target.value as SortKey;
+                  applySort({ key, dir: defaultDir(key) });
+                }}
+              >
+                {SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="sort-dir"
+                aria-label={sortDirectionLabel(sort.key, sort.dir)}
+                title={sortDirectionLabel(sort.key, sort.dir)}
+                onClick={() =>
+                  applySort({
+                    key: sort.key,
+                    dir: sort.dir === "asc" ? "desc" : "asc",
+                  })
+                }
+              >
+                {sort.dir === "asc" ? "↑" : "↓"}
+              </button>
+            </div>
             {!inTrash && visibleFiles.length > 0 && selectedFileIds.size === 0 ? (
               <button
                 type="button"
@@ -1609,11 +1658,17 @@ export function DrivePage() {
       ) : (
         <ul className="drive-grid">
           {visibleFolders.map((folder) => {
+            const folderWhen =
+              sort.key === "created"
+                ? formatSortDate(folder.created_at)
+                : sort.key === "modified"
+                  ? formatSortDate(folder.updated_at)
+                  : null;
             const folderSubtitle = inTrash
-              ? ttlLabel(folder.expires_at)
+              ? [ttlLabel(folder.expires_at), folderWhen].filter(Boolean).join(" · ")
               : folder.location
-                ? `Pasta · ${folder.location}`
-                : "Pasta";
+                ? ["Pasta", folder.location, folderWhen].filter(Boolean).join(" · ")
+                : ["Pasta", folderWhen].filter(Boolean).join(" · ");
             return (
               <li key={`d-${folder.id}`}>
                 <div className="tile">
@@ -1690,11 +1745,21 @@ export function DrivePage() {
           })}
           {visibleFiles.map((file) => {
             const isSelected = !inTrash && selectedFileIds.has(file.id);
-            const fileSubtitle = inTrash
-              ? `${formatBytes(file.tamanho_bytes)} · ${ttlLabel(file.expires_at)}`
-              : file.location
-                ? `${formatBytes(file.tamanho_bytes)} · ${file.location}`
-                : formatBytes(file.tamanho_bytes);
+            const fileExtra =
+              sort.key === "created"
+                ? formatSortDate(file.created_at)
+                : sort.key === "modified"
+                  ? formatSortDate(file.updated_at)
+                  : sort.key === "type"
+                    ? categoryLabel(file)
+                    : null;
+            const fileSubtitle = [
+              formatBytes(file.tamanho_bytes),
+              inTrash ? ttlLabel(file.expires_at) : file.location,
+              fileExtra,
+            ]
+              .filter(Boolean)
+              .join(" · ");
             const vTag = file.tamanho_bytes + (fileVersions[file.id] ?? 0);
             return (
               <li key={`f-${file.id}`}>
