@@ -14,9 +14,13 @@ RUN mkdir -p src \
     && cargo build --release --locked \
     && rm -rf src target/release/.fingerprint/drive-* target/release/deps/drive* target/release/deps/libdrive*
 
-# Compilação real da aplicação
+# Compilação real da aplicação.
+# O cache acima deixa target/release/drive como um main vazio. Os arquivos
+# copiados podem ter mtime anterior a esse binário, e o Cargo então não recompila.
 COPY src ./src
-RUN cargo build --release --locked
+RUN find src -type f -exec touch {} + \
+    && cargo build --release --locked \
+    && grep -a -q "Servidor inicializado" target/release/drive
 
 FROM debian:bookworm-slim
 
